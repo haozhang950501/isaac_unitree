@@ -126,11 +126,11 @@ Currently, the project employs Unitree G1/H1-2 robots equipped with different ac
 
 This project requires Isaac Sim 4.5.0/Isaac Sim 5.0.0 and Isaac Lab. You can refer to the [official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html)  or follow the steps below. The installation methods for Ubuntu 20.04 and Ubuntu 22.04 (and later versions) are different. Please choose the installation method based on your system version and GPU resources.
 
-### 2.1 Isaac Sim 4.5.0 Environment Installation (Recommended for RTX 4080 and below)
+### 2.1 Isaac Sim 4.5.0 Environment Installation
 
 Please refer to the <a href="doc/isaacsim4.5_install.md">Isaac Sim 4.5.0 Environment Installation Steps</a> for the setup.
 
-### 2.2 Isaac Sim 5.0.0 Environment Installation (Recommended for RTX 4080 and above)
+### 2.2 Isaac Sim 5.0.0 Environment Installation
 
 Please refer to the <a href="doc/isaacsim5.0_install.md">Isaac Sim 5.0.0 Environment Installation Steps</a> for the setup.
 
