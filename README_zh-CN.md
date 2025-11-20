@@ -127,11 +127,11 @@
 ## 2、⚙️ 环境配置与运行
 该项目需要安装Isaac Sim 4.5.0/Isaac Sim 5.0.0以及Isaac Lab，具体安装可参考[官方教程](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html).或者按照下面流程进行安装。Ubuntu 20.4与Ubuntu 22.4以及以上版本安装方式不同，请根据自己的系统版本以及显卡资源进行安装。
 
-### 2.1 Isaac Sim 4.5.0相关环境安装（RTX4080以下推荐安装）
+### 2.1 Isaac Sim 4.5.0相关环境安装
 
 请参考<a href="doc/isaacsim4.5_install_zh.md"> isaacsim 4.5.0 环境安装步骤 </a> 进行环境安装
 
-### 2.2 Isaac Sim 5.0.0相关环境安装（RTX4080以及以上推荐安装）
+### 2.2 Isaac Sim 5.0.0相关环境安装
 请参考<a href="doc/isaacsim5.0_install_zh.md"> isaacsim 5.0.0 环境安装步骤 </a> 进行环境安装
 
 ### 2.3 构建docker环境（使用的是Ubuntu22.04/IsaacSim 5.0）
