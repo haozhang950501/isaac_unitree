@@ -106,7 +106,6 @@ class G1RobotDDS(DDSObject):
 
             self.low_state.tick += 1
             self.low_state.crc = self.crc.Crc(self.low_state)
-
             self.publisher.Write(self.low_state)
 
         except Exception as e:

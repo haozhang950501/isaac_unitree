@@ -4,7 +4,7 @@ from action_provider.action_base import ActionProvider
 from typing import Optional
 import torch
 from tools.data_json_load import load_robot_data
-from image_server.shared_memory_utils import MultiImageReader
+from tools.shared_memory_utils import MultiImageReader
 from tools.episode_writer import EpisodeWriter
 import json
 from typing import List, Optional
@@ -251,20 +251,23 @@ class FileActionProviderReplay(ActionProvider):
         return left_arm_joint_pose,right_arm_joint_pose,left_hand_joint_pose,right_hand_joint_pose
 
     def get_images(self,image_count=3):
-        concatenated_image = self.multi_image_reader.read_concatenated_image()
-        if concatenated_image is None:
-            return None
-        height, total_width, channels = concatenated_image.shape
-        single_width = total_width // image_count
-        if total_width % image_count != 0:
-            raise ValueError("Total width is not divisible by image_count. Cannot split cleanly.")
-
+        """Get images using read_single_image for each camera (no merge/split operations)"""
         images = {}
         names = ['head', 'left', 'right']
-        for i, name in enumerate(names[:image_count]):
-            x_start = i * single_width
-            x_end = x_start + single_width
-            images[name] = concatenated_image[:, x_start:x_end, :]
+
+        for name in names[:image_count]:
+            image = self.multi_image_reader.read_single_image(name)
+            if image is not None:
+                images[name] = image
+            else:
+                print(f"Warning: {name} image not available in shared memory")
+
+        # Check if we have the expected number of images
+        if len(images) != image_count:
+            print(f"Warning: Expected {image_count} images, got {len(images)}")
+            # For backward compatibility, return None if not all images are available
+            return None
+
         return images
     def save_date(self,env,arm_action,hand_action,sim_state=None):
         def ensure_list(data):

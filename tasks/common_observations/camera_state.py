@@ -15,7 +15,7 @@ import queue
 
 # add the project root directory to the path, so that the shared memory tool can be imported
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from image_server.shared_memory_utils import MultiImageWriter
+from tools.shared_memory_utils import MultiImageWriter
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv

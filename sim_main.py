@@ -20,7 +20,7 @@ from pathlib import Path
 # Isaac Lab AppLauncher
 from isaaclab.app import AppLauncher
 
-from image_server.image_server import ImageServer
+from teleimager.image_server import run_isaacsim_server
 from dds.dds_create import create_dds_objects,create_dds_objects_replay
 # add command line arguments
 parser = argparse.ArgumentParser(description="Unitree Simulation")
@@ -90,7 +90,7 @@ if args_cli.enable_dex3_dds and args_cli.enable_dex1_dds and args_cli.enable_ins
     sys.exit(1)
 
 
-import pinocchio 
+import pinocchio                 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -348,7 +348,7 @@ def main():
             focal_length=3.0,
             horizontal_aperture=22.0,
             vertical_aperture=16.0,
-            exposure=0.8,
+            exposure=0.8,                
             focus_distance=1.2
         )
     env.sim.reset()
@@ -369,7 +369,7 @@ def main():
     if not args_cli.replay_data:
         print("========= create image server =========")
         try:
-            server = ImageServer(fps=30, Unit_Test=False)
+            run_isaacsim_server()
         except Exception as e:
             print(f"Failed to create image server: {e}")
             return
@@ -433,6 +433,7 @@ def main():
         setup_signal_handlers(controller,dds_manager)
     else:
         setup_signal_handlers(controller)
+        
     print("Note: The DDS in Sim transmits messages on channel 1. Please ensure that other DDS instances use the same channel for message exchange by setting: ChannelFactoryInitialize(1).")
     try:
         # start controller - start asynchronous components
@@ -469,19 +470,16 @@ def main():
                     except Exception as e:
                         print(f"Failed to write sim state: {e}")
                         raise e
-                    # print(f"reset_pose_dds: {reset_pose_dds}")
                     try:
                         reset_pose_cmd = reset_pose_dds.get_reset_pose_command()
                     except Exception as e:
                         print(f"Failed to get reset pose command: {e}")
                         raise e
-                    # # print(f"reset_pose_cmd: {reset_pose_cmd}")
                     # Compute current reward values manually if needed for debugging
                     try:
                         if (loop_count % reward_interval) == 0:
                             pass
                             # current_reward = get_step_reward_value(env)
-                            # print(f"reward: {current_reward}")
                     except Exception as e:
                         print(f"奖励计算失败: {e}")
                         pass
@@ -489,7 +487,6 @@ def main():
                     if reset_pose_cmd is not None:
                         try:
                             reset_category = reset_pose_cmd.get("reset_category")
-                            # print(f"reset_category: {reset_category}")
                             if (args_cli.enable_wholebody_dds and (reset_category == '1' or reset_category == '2')) or (not args_cli.enable_wholebody_dds and reset_category == '1'):
                                 print("reset object")
                                 env_cfg.event_manager.trigger("reset_object_self", env)
@@ -580,7 +577,7 @@ def main():
         # clean up resources
         print("\nclean up resources...")
         controller.cleanup()
-        
+        image_server.stop()
         env.close()
         print("cleanup completed")
     # profiler.disable()
