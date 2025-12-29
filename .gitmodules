@@ -1,3 +1,4 @@
 [submodule "teleimager"]
 	path = teleimager
 	url = https://github.com/unitreerobotics/teleimager
+	branch = main

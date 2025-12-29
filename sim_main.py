@@ -114,7 +114,7 @@ from action_provider.create_action_provider import create_action_provider
 from tools.get_stiffness import get_robot_stiffness_from_env
 from tools.get_reward import get_step_reward_value,get_current_rewards
 
-def setup_signal_handlers(controller,dds_manager=None):
+def setup_signal_handlers(controller,dds_manager=None,image_server=None):
     """set signal handlers"""
     def signal_handler(signum, frame):
         print(f"\nreceived signal {signum}, stopping controller...")
@@ -127,7 +127,11 @@ def setup_signal_handlers(controller,dds_manager=None):
                 dds_manager.stop_all_communication()
         except Exception as e:
             print(f"Failed to stop DDS: {e}")
-    
+        try:
+            if image_server is not None:
+                image_server.stop()
+        except Exception as e:
+            print(f"Failed to stop image server: {e}")
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -369,7 +373,7 @@ def main():
     if not args_cli.replay_data:
         print("========= create image server =========")
         try:
-            run_isaacsim_server()
+            image_server = run_isaacsim_server()
         except Exception as e:
             print(f"Failed to create image server: {e}")
             return
@@ -430,7 +434,7 @@ def main():
 
     # set signal handlers
     if not args_cli.replay_data:
-        setup_signal_handlers(controller,dds_manager)
+        setup_signal_handlers(controller,dds_manager,image_server)
     else:
         setup_signal_handlers(controller)
         
