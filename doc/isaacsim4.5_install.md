@@ -83,6 +83,10 @@ pip3 install -e .
 - **Install other dependencies**
 ```
 pip install -r requirements.txt
+
+cd teleimager
+
+pip install -e .
 ```
 
 ### 2.3 Installation on Ubuntu 20.04(binary install)

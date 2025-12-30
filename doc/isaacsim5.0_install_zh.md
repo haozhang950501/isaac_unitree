@@ -156,6 +156,10 @@ pip3 install -e .
 ```
 pip install -r requirements.txt
 
+cd teleimager
+
+pip install -e .
+
 ```
 
 

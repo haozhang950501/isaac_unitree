@@ -83,6 +83,10 @@ pip3 install -e .
 - 安装其他依赖
 ```
 pip install -r requirements.txt
+
+cd teleimager
+
+pip install -e .
 ```
 
 ### 2.3 Ubuntu 20.4(二进制)安装
