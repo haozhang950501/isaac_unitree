@@ -7,9 +7,9 @@ def convert_to_joint_range(value):
                 0.0: fully closed
         
     Returns:
-        float: the converted value, range in [-0.02, 0.03]
+        float: the converted value, range in [-0.02, 0.024]
                 -0.02: fully open
-                0.03: fully closed
+                0.024: fully closed
     """
     # input range (gripper control value)
     input_min = 0.0    # fully closed
@@ -28,12 +28,12 @@ def convert_to_joint_range(value):
     return converted_value
 
 def convert_to_gripper_range(value):
-    """Convert the Isaac Lab joint angle to the gripper control value [-0.02, 0.03] -> [5.6, 0]
+    """Convert the Isaac Lab joint angle to the gripper control value [-0.02, 0.024] -> [5.6, 0]
     
     Args:
         value: the input value, range in [-0.02, 0.024]
                 -0.02: fully open
-                0.03: fully closed
+                0.024: fully closed
         
     Returns:
         float: the converted value, range in [5.6, 0]
