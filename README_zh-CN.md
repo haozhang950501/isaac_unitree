@@ -129,12 +129,33 @@
 
 ### 2.1 Isaac Sim 4.5.0相关环境安装
 
+环境的安装可以采用下面两种方式进行：
+
+- 使用 `setup_env.sh` 脚本进行自动安装
+```
+chmod +x setup_env.sh
+bash setup_env.sh 4.5 unitree_sim_env
+```
+
+- 参考下面文档进行安装 
+  
 请参考<a href="doc/isaacsim4.5_install_zh.md"> isaacsim 4.5.0 环境安装步骤 </a> 进行环境安装
 
 ### 2.2 Isaac Sim 5.0.0/5.1.0相关环境安装
+环境的安装可以采用下面两种方式进行：
+
+- 使用 `setup_env.sh` 脚本进行自动安装
+```
+chmod +x setup_env.sh
+bash setup_env.sh 5.0 unitree_sim_env 
+或者 
+bash setup_env.sh 5.1 unitree_sim_env
+```
+- 参考下面文档进行安装 
+
 请参考<a href="doc/isaacsim5.0_install_zh.md"> isaacsim 5.0.0 环境安装步骤 </a> ，<a href="doc/isaacsim5.1_install_zh.md"> isaacsim 5.1.0 环境安装步骤 </a> 进行环境安装
 
-### 2.3 构建docker环境（使用的是Ubuntu22.04/IsaacSim 5.0）
+### 2.3 构建docker环境（使用的是Ubuntu22.04/IsaacSim 5.1）
 #### 2.3.1 构建docker
 ```bash
 sudo docker pull nvidia/cuda:12.2.0-runtime-ubuntu22.04

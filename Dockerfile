@@ -52,7 +52,7 @@ RUN pip install --upgrade pip && \
 
 
 # 安装 Isaac Sim
-RUN pip install "isaacsim[all,extscache]==5.0.0" --extra-index-url https://pypi.nvidia.com
+RUN pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
 
 # 创建工作目录
 RUN mkdir -p /home/code
@@ -61,7 +61,6 @@ WORKDIR /home/code
 # 克隆并安装 IsaacLab
 RUN git clone https://github.com/isaac-sim/IsaacLab.git && \
     cd IsaacLab && \
-    git checkout v2.2.0 && \
     ./isaaclab.sh --install
     
 # 构建 CycloneDDS
@@ -79,7 +78,8 @@ RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python && \
 
 # 克隆 unitree_sim_isaaclab
 RUN git clone https://github.com/unitreerobotics/unitree_sim_isaaclab.git /home/code/unitree_sim_isaaclab && \
-    cd /home/code/unitree_sim_isaaclab && pip install -r requirements.txt
+    cd /home/code/unitree_sim_isaaclab && git submodule update --init --depth 1 && cd teleimager && pip install -e . && \
+    cd ../ && pip install -r requirements.txt
 
 
 # ==============================

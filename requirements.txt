@@ -5,3 +5,4 @@ onnxruntime==1.22.1
 onnx
 pynput==1.8.1
 aiortc
+aiohttp
