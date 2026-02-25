@@ -367,7 +367,7 @@ def get_robot_imu_data(env, use_torso_imu: bool = True, quat_w_first: bool = Non
     a_world_corrected = a_world - g_world  # [B,3]
 
     # prepare quaternion in (w,x,y,z)
-    quat_wxyz = ensure_quat_w_first(quat, assume_w_first=quat_w_first)
+    quat_wxyz = ensure_quat_w_first(quat, assume_w_first=True)
 
     # build rotation matrices R_body->world ; to convert world->body use R^T
     R_body_to_world = quat_to_rot_matrix(quat_wxyz)  # [B,3,3]

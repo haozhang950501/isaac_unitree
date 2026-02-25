@@ -78,7 +78,8 @@ RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python && \
 
 # 克隆 unitree_sim_isaaclab
 RUN git clone https://github.com/unitreerobotics/unitree_sim_isaaclab.git /home/code/unitree_sim_isaaclab && \
-    cd /home/code/unitree_sim_isaaclab && git submodule update --init --depth 1 && cd teleimager && pip install -e . && \
+    cd /home/code/unitree_sim_isaaclab && git submodule update --init --depth 1 && git submodule update --remote --merge && \
+    cd teleimager && pip install -e . && \
     cd ../ && pip install -r requirements.txt
 
 

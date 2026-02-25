@@ -79,7 +79,7 @@ fi
 cd "$UNITREE_DIR"
 echo "Initializing submodules for unitree_sim_isaaclab..."
 git submodule update --init --depth 1
-
+# git submodule update --remote --merge
 
 # ==========================================
 # PHASE 2: BUILD C++ DEPENDENCIES
@@ -125,6 +125,9 @@ sed -i 's/requires-python = ">=3.8,<3.11"/requires-python = ">=3.8,<3.12"/g' tel
 
 echo "Installing Isaac Lab..."
 cd ../IsaacLab
+if [ "$ISAAC_VERSION" == "5.0" ]; then
+    git checkout v2.2.0
+fi
 # git checkout "$ISAAC_LAB_COMMIT"
 ./isaaclab.sh --install
 
