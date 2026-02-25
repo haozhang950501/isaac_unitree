@@ -14,7 +14,7 @@ if [ "$#" -lt 2 ]; then
     exit 1
 fi
 
-sudo apt-get update && sudo apt-get install -y cmake build-essential
+sudo apt-get update && sudo apt-get install -y cmake build-essential openssl git-lfs unzip
 
 ISAAC_VERSION=$1
 ENV_NAME=$2
@@ -55,14 +55,16 @@ UNITREE_DIR=$(pwd)
 # ==========================================
 # PHASE 1: PRE-CLONE ALL REPOSITORIES
 # ==========================================
+echo "=================================================="
 echo "=== Phase 1: Cloning all required repositories ==="
+echo "=================================================="
 
-# 跳转到上级目录统一克隆外部依赖
+
 cd ..
 
 if [ ! -d "IsaacLab" ]; then
     echo "Cloning Isaac Lab..."
-    git clone git@github.com:isaac-sim/IsaacLab.git
+    git clone https://github.com/isaac-sim/IsaacLab.git
 fi
 
 if [ ! -d "cyclonedds" ]; then
@@ -75,16 +77,37 @@ if [ ! -d "unitree_sdk2_python" ]; then
     git clone https://github.com/unitreerobotics/unitree_sdk2_python
 fi
 
-# 回到项目根目录，初始化子模块
+
 cd "$UNITREE_DIR"
+echo "**************************************************"
 echo "Initializing submodules for unitree_sim_isaaclab..."
+echo "**************************************************"
 git submodule update --init --depth 1
 # git submodule update --remote --merge
+
+
+echo "**************************************************"
+echo "Generate certificate files..."
+echo "Just keep pressing the Enter key."
+echo "**************************************************"   
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout key.pem -out cert.pem
+mkdir -p ~/.config/xr_teleoperate/
+cp key.pem cert.pem ~/.config/xr_teleoperate/
+rm key.pem cert.pem
+
+
+echo "**************************************************"
+echo "Downloading Isaac Lab assets..."
+echo "**************************************************"   
+chmod +x fetch_assets.sh
+bash fetch_assets.sh
 
 # ==========================================
 # PHASE 2: BUILD C++ DEPENDENCIES
 # ==========================================
+echo "=================================================="
 echo "=== Phase 2: Pre-compiling CycloneDDS ==="
+echo "=================================================="
 cd ../cyclonedds
 if [ ! -d "install" ]; then
     mkdir -p build install
@@ -93,7 +116,7 @@ if [ ! -d "install" ]; then
     cmake --build . --target install
     cd ..
 fi
-# 导出绝对路径给稍后的 pip install 使用
+
 export CYCLONEDDS_HOME="$(pwd)/install"
 cd "$UNITREE_DIR"
 
@@ -101,9 +124,12 @@ cd "$UNITREE_DIR"
 # ==========================================
 # PHASE 3: CONDA ENVIRONMENT & INSTALLATION
 # ==========================================
+echo "=================================================="
 echo "=== Phase 3: Setting up Conda and installing packages ==="
-
+echo "=================================================="
+echo "**************************************************"
 echo "Initializing Conda environment..."
+echo "**************************************************"
 CONDA_BASE=$(conda info --base)
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 
@@ -118,11 +144,15 @@ echo "Installing Isaac Sim $ISAAC_VERSION..."
 pip install --upgrade pip
 pip install "$ISAAC_SIM_PKG" --extra-index-url https://pypi.nvidia.com
 
+echo "**************************************************"
 echo "Modifying teleimager configurations..."
+echo "**************************************************"
 sed -i 's/type:.*/type: isaacsim/' teleimager/cam_config_server.yaml
 sed -i 's/image_shape:.*/image_shape: [480, 640]/' teleimager/cam_config_server.yaml
 
+echo "**************************************************"
 echo "Installing Isaac Lab..."
+echo "**************************************************"
 cd ../IsaacLab
 if [ "$ISAAC_VERSION" == "5.0" ]; then
     git checkout v2.2.0
@@ -130,11 +160,14 @@ fi
 # git checkout "$ISAAC_LAB_COMMIT"
 ./isaaclab.sh --install
 
+echo "**************************************************"
 echo "Installing unitree_sdk2_python..."
+echo "**************************************************"   
 cd ../unitree_sdk2_python
 pip install -e .
-
+echo "**************************************************"
 echo "Installing remaining requirements and teleimager..."
+echo "**************************************************"
 cd "$UNITREE_DIR"
 pip install -r requirements.txt
 cd teleimager
@@ -145,6 +178,7 @@ if [ "$ISAAC_VERSION" == "5.0" ] || [ "$ISAAC_VERSION" == "5.1" ]; then
     echo "Applying libstdc++ patch..."
     conda install -y -c conda-forge libstdcxx-ng
 fi
+
 
 echo "=================================================="
 echo "Environment $ENV_NAME setup complete for Isaac Sim $ISAAC_VERSION!"

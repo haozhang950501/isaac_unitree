@@ -129,11 +129,11 @@ This project requires Isaac Sim 4.5.0/Isaac Sim 5.x.0 and Isaac Lab. You can ref
 ### 2.1 Isaac Sim 4.5.0 Environment Installation
 
 The environment can be installed using one of the following two methods:
-- Use the `setup_env.sh` script for automatic installation.
+- Use the `auto_setup_env.sh` script for automatic installation.
 
 ```
-chmod +x setup_env.sh
-bash setup_env.sh 4.5 unitree_sim_env
+chmod +x auto_setup_env.sh
+bash auto_setup_env.sh 4.5 unitree_sim_env
 ```
 - Follow the documentation below for installation.
 
@@ -142,17 +142,19 @@ Please refer to the <a href="doc/isaacsim4.5_install.md">Isaac Sim 4.5.0 Environ
 ### 2.2 Isaac Sim 5.0.0/5.1.0 Environment Installation
 
 The environment can be installed using one of the following two methods:
-- Use the `setup_env.sh` script for automatic installation.
+- Use the `auto_setup_env.sh` script for automatic installation.
 
 ```
-chmod +x setup_env.sh
-bash setup_env.sh 5.0 unitree_sim_env 
+chmod +x auto_setup_env.sh
+bash auto_setup_env.sh 5.0 unitree_sim_env 
 or 
-bash setup_env.sh 5.1 unitree_sim_env
+bash auto_setup_env.sh 5.1 unitree_sim_env
 ```
 - Follow the documentation below for installation.
 
 Please refer to the <a href="doc/isaacsim5.0_install.md">Isaac Sim 5.0.0 Environment Installation Steps</a>， <a href="doc/isaacsim5.1_install.md">Isaac Sim 5.1.0 Environment Installation Steps</a> for the setup.
+
+**Recommended:** Use the `auto_setup_env.sh` script to automatically install the environment and download the required assets.
 
 ### 2.3 Build the Docker Environment (Using Ubuntu 22.04 / IsaacSim 5.1)
 
