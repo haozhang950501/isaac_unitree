@@ -121,7 +121,6 @@ pip install "$ISAAC_SIM_PKG" --extra-index-url https://pypi.nvidia.com
 echo "Modifying teleimager configurations..."
 sed -i 's/type:.*/type: isaacsim/' teleimager/cam_config_server.yaml
 sed -i 's/image_shape:.*/image_shape: [480, 640]/' teleimager/cam_config_server.yaml
-sed -i 's/requires-python = ">=3.8,<3.11"/requires-python = ">=3.8,<3.12"/g' teleimager/pyproject.toml
 
 echo "Installing Isaac Lab..."
 cd ../IsaacLab
