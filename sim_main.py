@@ -59,12 +59,10 @@ parser.add_argument("--render_interval", type=int, default=None, help="render in
 parser.add_argument("--camera_write_interval", type=int, default=None, help="camera write interval steps (>=1)")
 
 
-parser.add_argument(
-    "--no_render",
-    action="store_true",
-    default=False,
-    help="disable rendering updates entirely (overrides render interval)",
-)
+parser.add_argument("--no_render",action="store_true",default=False,help="disable rendering updates entirely (overrides render interval)",)
+parser.add_argument("--public_ip",type=str,default="127.0.0.1",help="public ip")
+parser.add_argument("--livestream_type", type=int, default=2, help="livestream type (0: no livestream, 1: WebRTC public network, 2:  WebRTC private network)")
+
 parser.add_argument("--solver_iterations", type=int, default=None, help="physx solver iteration count (e.g., 4)")
 parser.add_argument("--gravity_z", type=float, default=None, help="override gravity z (e.g., -9.8)")
 parser.add_argument("--skip_cvtcolor", action="store_true", default=False, help="skip cv2.cvtColor if upstream already BGR")
@@ -78,11 +76,14 @@ parser.add_argument("--camera_exclude", type=str, default="world_camera", help="
 
 parser.add_argument("--env_reward_interval", type=int, default=5, help="environment reward compute interval (steps)")
 parser.add_argument("--seed", type=int, default=42, help="environment seed")
-
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
-
+if args_cli.no_render:
+    os.environ["LIVESTREAM"] = str(args_cli.livestream_type)
+    os.environ["PUBLIC_IP"] = args_cli.public_ip
+else:
+    os.environ["LIVESTREAM"] = "0"
 
 if args_cli.enable_dex3_dds and args_cli.enable_dex1_dds and args_cli.enable_inspire_dds:
     print("Error: enable_dex3_dds and enable_dex1_dds and enable_inspire_dds cannot be enabled at the same time")

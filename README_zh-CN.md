@@ -196,20 +196,22 @@ sudo apt install git-lfs
 python sim_main.py --device cpu  --enable_cameras  --task  Isaac-PickPlace-Cylinder-G129-Dex1-Joint    --enable_dex1_dds --robot_type g129
 ```
 
-- --task: 任务名称，对应上表中的任务名称
-- --enable_dex1_dds/--enable_dex3_dds: 分别代表启用二指夹爪/三指灵巧手的dds
-- --robot_type: 机器人类型，目前有29自由度的unitree g1(g129),27自由度的H1-2
-- --headless: 不启动Sim窗口下运行,如果使用Docker环境进行运行请添加此参数
+- `--task:` 任务名称，对应上表中的任务名称
+- `--enable_dex1_dds/--enable_dex3_dds:` 分别代表启用二指夹爪/三指灵巧手的dds
+- `--robot_type:` 机器人类型，目前有29自由度的unitree g1(g129),27自由度的H1-2
+- `--no_render:` 不启动Sim窗口下运行并且开启WebRTC视频流, 如果使用Docker环境进行运行请添加此参数; 可以使用isaacsim-webrtc-streaming-client进行查看画面
 
-**注意:** 如需要控制机器人移动，请参考`send_commands_8bit.py` 或者 `send_commands_keyboard.py` 发布控制命令，也可以直接使用。但是请注意只有带有`Wholebody`标识的才是移动型任务，才能控制机器人移动。
+**注意 1:** 如需要控制机器人移动，请参考`send_commands_8bit.py` 或者 `send_commands_keyboard.py` 发布控制命令，也可以直接使用。但是请注意只有带有`Wholebody`标识的才是移动型任务，才能控制机器人移动。
+
+**注意 2:** isaacsim-webrtc-streaming-client 是isaacsim提供的一个用于查看Sim窗口画面的工具，具体安装和使用可参考[官方教程](https://docs.isaacsim.omniverse.nvidia.com/6.0.0/installation/manual_livestream_clients.html).
 
 #### 2.4.3 数据回放
 
 ```
 python sim_main.py --device cpu  --enable_cameras  --task Isaac-Stack-RgyBlock-G129-Dex1-Joint     --enable_dex1_dds --robot_type g129 --replay  --file_path "/home/unitree/Code/xr_teleoperate/teleop/utils/data" 
 ```
-- --replay: 用于判断是否进行数据回放
-- --file_path: 数据集存放的目录(请修改自己的数据集路径)。
+- `--replay:` 用于判断是否进行数据回放
+- `--file_path:` 数据集存放的目录(请修改自己的数据集路径)。
 
 **注意：** 这里使用的数据集存放格式是与[xr_teleoperate](https://github.com/unitreerobotics/xr_teleoperate)遥操作录制的数据集格式一致。
 
@@ -220,11 +222,11 @@ python sim_main.py --device cpu  --enable_cameras  --task Isaac-Stack-RgyBlock-G
 ```
  python sim_main.py --device cpu  --enable_cameras  --task Isaac-Stack-RgyBlock-G129-Dex1-Joint     --enable_dex1_dds --robot_type g129 --replay  --file_path "/home/unitree/Code/xr_teleoperate/teleop/utils/data" --generate_data --generate_data_dir "./data2"
 ```
-- --generate_data: 是否生成新的数据
-- --generate_data_dir: 新数据存放的路径
-- --rerun_log: 是否开启数据录制日志
-- --modify_light: 是否修改光照条件(这个需要自己根据需求修改main函数中update_light的参数)
-- --modify_camera: 是否修改相机参数(这个需要自己根据需求修改main函数中batch_augment_cameras_by_name参数)
+- `--generate_data:` 是否生成新的数据
+- `--generate_data_dir:` 新数据存放的路径
+- `--rerun_log:` 是否开启数据录制日志
+- `--modify_light:` 是否修改光照条件(这个需要自己根据需求修改main函数中update_light的参数)
+- `--modify_camera:` 是否修改相机参数(这个需要自己根据需求修改main函数中batch_augment_cameras_by_name参数)
 
 **注意:** 如需要修改光照条件或者相机参数，请修改需要的参数并且测试后再进行大量生成。
 

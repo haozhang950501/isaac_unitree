@@ -201,21 +201,25 @@ sudo apt install git-lfs
 python sim_main.py --device cpu  --enable_cameras  --task  Isaac-PickPlace-Cylinder-G129-Dex1-Joint    --enable_dex1_dds --robot_type g129
 ```
 
-- --task: Task name, corresponding to the task names in the table above
-- --enable_dex1_dds/--enable_dex3_dds: Represent enabling DDS for two-finger gripper/three-finger dexterous hand respectively  
-- --robot_type: Robot type, currently has 29-DOF unitree g1 (g129),27-DoF H1-2
-- --headless: This allows running without launching the simulation window. Add this parameter if you're using a Docker environment.
+- `--task`: Task name, corresponding to the task names in the table above
+- `--enable_dex1_dds/--enable_dex3_dds`: Represent enabling DDS for two-finger gripper/three-finger dexterous hand respectively  
+- `--robot_type`: Robot type, currently has 29-DOF unitree g1 (g129),27-DoF H1-2
+- `--no_render`: Run without launching the Sim window and enable the WebRTC video stream. If running in a Docker environment, please add this parameter. You can use the Isaac Sim WebRTC Streaming Client to view the video feed.
+.
 
-**Note:** If you need to control robot movement, please refer to `send_commands_8bit.py` or `send_commands_keyboard.py` to publish control commands, or you can use them directly. Please note that only tasks marked with `Wholebody` are mobile tasks and can control the robot's movement.
+**Note 1:** If you need to control robot movement, please refer to `send_commands_8bit.py` or `send_commands_keyboard.py` to publish control commands, or you can use them directly. Please note that only tasks marked with `Wholebody` are mobile tasks and can control the robot's movement.
+
+**Note 2:** The Isaac Sim WebRTC Streaming Client is a tool provided by NVIDIA Isaac Sim for viewing the Sim window remotely. For installation and usage details, please refer to the 
+[official documentation](https://docs.isaacsim.omniverse.nvidia.com/6.0.0/installation/manual_livestream_clients.html)
 
 #### 2.4.3 Data Replay
 
 ```
 python sim_main.py --device cpu  --enable_cameras  --task Isaac-Stack-RgyBlock-G129-Dex1-Joint     --enable_dex1_dds --robot_type g129 --replay  --file_path "/home/unitree/Code/xr_teleoperate/teleop/utils/data" 
 ```
-- --replay: Specifies whether to perform data replay.
+- `--replay:` Specifies whether to perform data replay.
 
-- --file_path: Directory where the dataset is stored (please update this to your own dataset path).
+- `--file_path:` Directory where the dataset is stored (please update this to your own dataset path).
 
 
 **Note:** The dataset format used here is consistent with the one recorded via teleoperation in [xr_teleoperate](https://github.com/unitreerobotics/xr_teleoperate) .
@@ -229,15 +233,15 @@ During data replay, by modifying lighting conditions and camera parameters and r
 python sim_main.py --device cpu  --enable_cameras  --task Isaac-Stack-RgyBlock-G129-Dex1-Joint     --enable_dex1_dds --robot_type g129 --replay  --file_path "/home/unitree/Code/xr_teleoperate/teleop/utils/data" --generate_data --generate_data_dir "./data2"
 ```
 
-- --generate_data: Enables generation of new data.
+- `--generate_data:` Enables generation of new data.
 
-- --generate_data_dir: Directory to store the newly generated data.
+- `--generate_data_dir:` Directory to store the newly generated data.
 
-- --rerun_log: Enables logging during data generation.
+- `--rerun_log:` Enables logging during data generation.
 
-- --modify_light: Enables modification of lighting conditions (you need to adjust the update_light function in main accordingly).
+- `--modify_light:` Enables modification of lighting conditions (you need to adjust the update_light function in main accordingly).
 
-- --modify_camera: Enables modification of camera parameters (you need to adjust the batch_augment_cameras_by_name function in main accordingly).
+- `--modify_camera:` Enables modification of camera parameters (you need to adjust the batch_augment_cameras_by_name function in main accordingly).
 
 **Note:**
 If you wish to modify lighting or camera parameters, please tune and test the parameters carefully before performing large-scale data generation.

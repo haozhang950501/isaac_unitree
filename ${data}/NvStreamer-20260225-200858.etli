@@ -1,0 +1,21 @@
+15029,MarkQosNameValue,SurfaceBitDepth,8
+15029,MarkQosNameValue,AdapterWidth,1280
+15029,MarkQosNameValue,AllTransitSelectionValuesForwarded,
+15029,MarkQosNameValue,IsCoProc,0
+15029,MarkQosNameValue,DriverBranch,NVIDIA UNIX x86_64 Kernel Module  550.163.01  Tue Apr  8 12:41:17 UTC 2025
+15029,MarkQosNameValue,AdapterRefreshRate,60.0
+15029,MarkQosNameValue,Device,NVIDIA GeForce RTX 4090
+15029,MarkQosNameValue,AdapterHeight,720
+15029,MarkQosNameValue,TransitSelectionValueForwarded,0
+15029,MarkQosNameValue,LtrEnabled,0
+15029,MarkQosNameValue,EncoderInputSurfaceFormat,invalid_format
+15029,MarkQosNameValue,AllTransitSelectionValuesApplied,
+15029,MarkQosNameValue,TransitSelectionValueApplied,0
+15029,MarkQosNameValue,DriverVersion,550.16
+15029,MarkQosNameValue,DataChannelMode,DcSCTP
+15029,MarkQos,StreamServerBackendMode is 2
+15029,MarkQos,stream 0 nvtime::sessionStartTime[us] on server: 125024394044
+15029,MarkQos,RL QOS disabled for stream: 0
+15029,MarkGsBlobStats,
+15502,MarkQos,Number of delayed commands: 0
+15502,MarkGsBlobStats,
