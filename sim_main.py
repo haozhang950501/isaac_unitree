@@ -83,6 +83,11 @@ parser.add_argument(
     action="store_true",
     help="start paused and control simulation from terminal (Enter/s: start, p: pause, r: reset, q: quit)",
 )
+parser.add_argument(
+    "--auto_tray_grasp",
+    action="store_true",
+    help="autonomously walk to the table, grab both tray handles with IK and lift the tray",
+)
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -414,9 +419,14 @@ def main():
     try:
         print(f"args_cli.task: {args_cli.task}")
         if not args_cli.replay_data and ("Wholebody" in args_cli.task or args_cli.enable_wholebody_dds):
-            args_cli.action_source = "dds_wholebody"
             args_cli.enable_wholebody_dds = True
             control_config.use_rl_action_mode = True
+            if args_cli.auto_tray_grasp:
+                # autonomous state-machine + IK provider (still uses the whole-body
+                # RL policy internally for balance/locomotion)
+                args_cli.action_source = "tray_grasp"
+            else:
+                args_cli.action_source = "dds_wholebody"
         action_provider = create_action_provider(env,args_cli)
         if action_provider is None:
             print("action provider creation failed, exiting")

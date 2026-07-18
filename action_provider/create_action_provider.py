@@ -14,6 +14,12 @@ def create_action_provider(env,args):
             env=env,
             args_cli=args
         )
+    elif args.action_source == "tray_grasp":
+        from action_provider.action_provider_tray_grasp import TrayGraspActionProvider
+        return TrayGraspActionProvider(
+            env=env,
+            args_cli=args
+        )
     elif args.action_source == "dds_wholebody":
         return DDSRLActionProvider(
             env=env,
