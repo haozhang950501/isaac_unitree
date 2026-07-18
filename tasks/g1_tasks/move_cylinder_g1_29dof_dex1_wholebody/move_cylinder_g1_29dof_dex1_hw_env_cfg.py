@@ -66,7 +66,7 @@ class ObjectTableSceneCfg(TableCylinderSceneCfgWH):
                 solver_velocity_iteration_count=2,
                 max_depenetration_velocity=1.0,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=3.0),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
             collision_props=sim_utils.CollisionPropertiesCfg(
                 collision_enabled=True,
                 contact_offset=0.005,
