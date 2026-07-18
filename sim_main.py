@@ -10,9 +10,11 @@ os.environ["PROJECT_ROOT"] = project_root
 
 import argparse
 import contextlib
+import queue
 import time
 import sys
 import signal
+import threading
 import torch
 import gymnasium as gym
 from pathlib import Path
@@ -76,6 +78,11 @@ parser.add_argument("--camera_exclude", type=str, default="world_camera", help="
 
 parser.add_argument("--env_reward_interval", type=int, default=5, help="environment reward compute interval (steps)")
 parser.add_argument("--seed", type=int, default=42, help="environment seed")
+parser.add_argument(
+    "--manual_sim_control",
+    action="store_true",
+    help="start paused and control simulation from terminal (Enter/s: start, p: pause, r: reset, q: quit)",
+)
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -445,6 +452,23 @@ def main():
         print("========= start controller =========")
         controller.start()
         print("========= start controller success =========")
+
+        manual_command_queue = queue.SimpleQueue()
+        simulation_paused = bool(args_cli.manual_sim_control)
+
+        if args_cli.manual_sim_control:
+            print("\n========= manual simulation control =========")
+            print("Simulation starts PAUSED.")
+            print("Enter or 's': start/resume | 'p': pause | 'r': reset and pause | 'q': quit")
+
+            def read_manual_commands():
+                while controller.is_running:
+                    try:
+                        manual_command_queue.put(input().strip().lower())
+                    except (EOFError, KeyboardInterrupt):
+                        break
+
+            threading.Thread(target=read_manual_commands, daemon=True).start()
         
         # main loop - execute in main thread to support rendering
         last_stats_time = time.time()
@@ -459,6 +483,35 @@ def main():
         # use torch.inference_mode() and exception suppression
         with contextlib.suppress(KeyboardInterrupt), torch.inference_mode():
             while simulation_app.is_running() and controller.is_running:
+                if args_cli.manual_sim_control:
+                    while not manual_command_queue.empty():
+                        command = manual_command_queue.get()
+                        if command in ("", "s", "start", "resume"):
+                            simulation_paused = False
+                            print("[manual] simulation running")
+                        elif command in ("p", "pause"):
+                            simulation_paused = True
+                            print("[manual] simulation paused")
+                        elif command in ("r", "reset"):
+                            env.reset()
+                            env.sim.render()
+                            simulation_paused = True
+                            print("[manual] scene reset; simulation paused")
+                        elif command in ("q", "quit", "exit"):
+                            print("[manual] stopping simulation")
+                            controller.stop()
+                            break
+                        else:
+                            print(f"[manual] unknown command: {command!r}")
+
+                    if not controller.is_running:
+                        break
+
+                    if simulation_paused:
+                        env.sim.render()
+                        time.sleep(0.02)
+                        continue
+
                 current_time = time.time()
                 loop_count += 1
                 if not args_cli.replay_data:
