@@ -17,7 +17,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
-from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.assets import ArticulationCfg
 from isaaclab.sensors import ContactSensorCfg
 from . import mdp
 # use Isaac Lab native event system
@@ -27,8 +27,6 @@ from tasks.common_event.event_manager import SimpleEvent, SimpleEventManager
 
 # import public scene configuration
 from tasks.common_scene.base_scene_pickplace_cylindercfg_wholebody import TableCylinderSceneCfgWH
-
-PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 ##
 # Scene definition
@@ -45,35 +43,6 @@ class ObjectTableSceneCfg(TableCylinderSceneCfgWH):
     # 5. humanoid robot configuration 
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_dex1_wholebody(init_pos=(-3.9, -2.81811, 0.8),
         init_rot=(1, 0, 0, 0))
-
-    # Dynamic Bozhon tray fixture initially resting on the packing table.
-    tray_fixture: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/TrayFixture",
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(-2.35644, -3.60, 0.80),
-            # Rotate 90 degrees around the world Z axis.
-            rot=(0.7071068, 0.0, 0.0, 0.7071068),
-            lin_vel=(0.0, 0.0, 0.0),
-            ang_vel=(0.0, 0.0, 0.0),
-        ),
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{PROJECT_ROOT}/assets/bozhon/tray_fixture_isaac45_dynamic.usd",
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                rigid_body_enabled=True,
-                kinematic_enabled=False,
-                disable_gravity=False,
-                solver_position_iteration_count=8,
-                solver_velocity_iteration_count=2,
-                max_depenetration_velocity=1.0,
-            ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled=True,
-                contact_offset=0.005,
-                rest_offset=0.0,
-            ),
-        ),
-    )
 
     contact_forces = ContactSensorCfg(prim_path="/World/envs/env_.*/Robot/.*", history_length=10, track_air_time=True, debug_vis=False)
     # 6. add camera configuration 

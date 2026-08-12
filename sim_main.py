@@ -75,6 +75,12 @@ parser.add_argument("--camera_jpeg_quality", type=int, default=85, help="JPEG qu
 parser.add_argument("--physx_substeps", type=int, default=None, help="physx substeps per step")
 parser.add_argument("--camera_include", type=str, default="front_camera,left_wrist_camera,right_wrist_camera", help="comma-separated camera names to enable")
 parser.add_argument("--camera_exclude", type=str, default="world_camera", help="comma-separated camera names to disable")
+parser.add_argument(
+    "--viewport_camera",
+    type=str,
+    default="none",
+    help="viewport camera after start: none (keep editor view, default), perspective, front_cam, or a full prim path",
+)
 
 parser.add_argument("--env_reward_interval", type=int, default=5, help="environment reward compute interval (steps)")
 parser.add_argument("--seed", type=int, default=42, help="environment seed")
@@ -82,11 +88,6 @@ parser.add_argument(
     "--manual_sim_control",
     action="store_true",
     help="start paused and control simulation from terminal (Enter/s: start, p: pause, r: reset, q: quit)",
-)
-parser.add_argument(
-    "--auto_tray_grasp",
-    action="store_true",
-    help="autonomously walk to the table, grab both tray handles with IK and lift the tray",
 )
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
@@ -148,6 +149,43 @@ def setup_signal_handlers(controller,dds_manager=None,image_server=None):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+
+
+def set_viewport_camera(camera_name: str) -> None:
+    """Switch the active Isaac Sim viewport to a robot / world camera.
+
+    ``camera_name`` shortcuts:
+      * ``front_cam`` / ``head`` / ``fpv`` → G1 head D435
+      * ``perspective`` / ``world`` → ``/World/PerspectiveCamera``
+      * otherwise treated as a full USD camera prim path
+    """
+    name = (camera_name or "").strip()
+    if not name or name.lower() in ("none", "off", "-"):
+        return
+
+    shortcuts = {
+        "front_cam": "/World/envs/env_0/Robot/d435_link/front_cam",
+        "front_camera": "/World/envs/env_0/Robot/d435_link/front_cam",
+        "head": "/World/envs/env_0/Robot/d435_link/front_cam",
+        "fpv": "/World/envs/env_0/Robot/d435_link/front_cam",
+        "perspective": "/World/PerspectiveCamera",
+        "world": "/World/PerspectiveCamera",
+        "world_camera": "/World/PerspectiveCamera",
+    }
+    cam_path = shortcuts.get(name.lower(), name)
+
+    try:
+        import omni.kit.viewport.utility as vp_util
+
+        viewport = vp_util.get_active_viewport()
+        if viewport is None:
+            print(f"[sim] no active viewport — open Cameras → {cam_path} manually")
+            return
+        viewport.set_active_camera(cam_path)
+        print(f"[sim] viewport camera → {cam_path}")
+        print("[sim] tip: PerspectiveCamera → Cameras 可随时切回俯视 / 其它相机")
+    except Exception as e:
+        print(f"[sim] failed to set viewport camera '{cam_path}': {e}")
 
 
 def main():
@@ -370,6 +408,10 @@ def main():
         )
     env.sim.reset()
     env.reset()
+
+    # Optional viewport camera switch (default: none — keep editor Perspective).
+    if not getattr(args_cli, "headless", False):
+        set_viewport_camera(getattr(args_cli, "viewport_camera", "none"))
     
     # create simplified control configuration
     try:    
@@ -421,12 +463,7 @@ def main():
         if not args_cli.replay_data and ("Wholebody" in args_cli.task or args_cli.enable_wholebody_dds):
             args_cli.enable_wholebody_dds = True
             control_config.use_rl_action_mode = True
-            if args_cli.auto_tray_grasp:
-                # autonomous state-machine + IK provider (still uses the whole-body
-                # RL policy internally for balance/locomotion)
-                args_cli.action_source = "tray_grasp"
-            else:
-                args_cli.action_source = "dds_wholebody"
+            args_cli.action_source = "dds_wholebody"
         action_provider = create_action_provider(env,args_cli)
         if action_provider is None:
             print("action provider creation failed, exiting")
