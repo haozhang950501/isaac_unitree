@@ -7,10 +7,9 @@ Layout:
 * One bare packing table (``SM_HeavyDutyPackingTable`` only — crates / container
   hidden at startup).  Table-top Z is scaled to match the CES LoadingLine
   underside.
-* ``ces_machine`` loads ``assets/bozhon/CESmachine_pickabble.usd`` with yaw
-  **+180°** (LoadingLine faces south), no extra +X shift.
-* Place table shifted **-3 m** along world -X.
-* Robot stands further along **+Y**, facing **+X**.
+* Compact robot / CES / table cluster, then yaw **+180°** about the cluster
+  XY centroid so the default viewport sees the robot from behind, looking at
+  the machine front (same composition as the G1 trailing camera).
 * ``object`` wraps ``Root/LoadingLine/Tray_Assembly_01/Product`` (``spawn=None``).
 * Warehouse ``Structure/walls`` are hidden at startup.
 """
@@ -38,41 +37,78 @@ TABLE_SCALE_Z = LOADING_LINE_BOTTOM_Z / _TABLE_LOCAL_HEIGHT  # ≈ 0.621
 TABLE_TOP_Z = LOADING_LINE_BOTTOM_Z
 
 # ---------------------------------------------------------------------------
-# CES pose — yaw = +180° (LoadingLine → -Y).
+# Compact cluster in the pre-rotation frame, then +180° about the XY centroid.
+#
+# Before rotation (robot faces +X toward CES):
+#   CES origin ≈ (-1.73, -1.33); robot ~1.9 m west; table on robot's right.
+# After +180° the robot faces -X and the default +X/+Y viewport looks over
+# its shoulder at the machine front.
 # ---------------------------------------------------------------------------
-_CES_YAW_RAD = math.radians(180.0)
-CES_SPAWN_ROT = (
-    math.cos(_CES_YAW_RAD / 2.0),
-    0.0,
-    0.0,
-    math.sin(_CES_YAW_RAD / 2.0),
-)  # (0, 0, 0, 1)
+_PRODUCT_LOCAL_IDENTITY = (0.469837, 0.871558, -0.140226)
+_PRODUCT_YAW_REL_CES = 90.0  # world yaw was 270° when CES yaw was 180°
 
-_PRODUCT_LOCAL_AFTER_YAW = (-0.469837, -0.871558, -0.140226)
-_CES_X_SHIFT = 0.0  # no +X bias (was 1.0 / 3.0)
-_TABLE_X_SHIFT = -3.0  # metres along -X
+_CES_YAW_BEFORE = 180.0
+_ROBOT_YAW_BEFORE = 0.0
+_TABLE_YAW_BEFORE = 0.0
+_CLUSTER_YAW = 180.0
 
-PRODUCT_POS = (-2.2 + _CES_X_SHIFT, -2.2, 0.820774)  # (-2.2, -2.2, 0.821)
-CES_SPAWN_POS = (
-    PRODUCT_POS[0] - _PRODUCT_LOCAL_AFTER_YAW[0],
-    PRODUCT_POS[1] - _PRODUCT_LOCAL_AFTER_YAW[1],
-    CES_SPAWN_Z,
-)  # ≈ (-1.7302, -1.3284, 0.961)
+_CES_BEFORE_XY = (-1.7302, -1.3284)
+# 0.35 m closer than the old (-4.00, -0.80) standoff; still ~1.2 m to the face.
+_ROBOT_BEFORE_XY = (_CES_BEFORE_XY[0] - 1.92, _CES_BEFORE_XY[1] + 0.48)
+# Table on the robot's right-forward (was ~2.8 m to the right; now ~1.7 m).
+_TABLE_BEFORE_XY = (_ROBOT_BEFORE_XY[0] + 0.50, _ROBOT_BEFORE_XY[1] - 1.70)
 
-_PROD_YAW = math.radians(270.0)
-PRODUCT_ROT = (
-    math.cos(_PROD_YAW / 2.0),
-    0.0,
-    0.0,
-    math.sin(_PROD_YAW / 2.0),
+_CLUSTER_CX = (_ROBOT_BEFORE_XY[0] + _CES_BEFORE_XY[0] + _TABLE_BEFORE_XY[0]) / 3.0
+_CLUSTER_CY = (_ROBOT_BEFORE_XY[1] + _CES_BEFORE_XY[1] + _TABLE_BEFORE_XY[1]) / 3.0
+
+
+def _yaw_quat(deg: float) -> tuple[float, float, float, float]:
+    """Z-up yaw quaternion (w, x, y, z)."""
+    rad = math.radians(deg % 360.0)
+    return (math.cos(rad / 2.0), 0.0, 0.0, math.sin(rad / 2.0))
+
+
+def _rotate_xy(x: float, y: float, deg: float, cx: float, cy: float) -> tuple[float, float]:
+    """Rotate (x, y) about (cx, cy) by yaw ``deg`` (CCW)."""
+    rad = math.radians(deg)
+    c, s = math.cos(rad), math.sin(rad)
+    dx, dy = x - cx, y - cy
+    return (cx + c * dx - s * dy, cy + s * dx + c * dy)
+
+
+def _rz_xy(x: float, y: float, deg: float) -> tuple[float, float]:
+    rad = math.radians(deg)
+    c, s = math.cos(rad), math.sin(rad)
+    return (c * x - s * y, s * x + c * y)
+
+
+_CES_YAW = _CES_YAW_BEFORE + _CLUSTER_YAW
+_ROBOT_XY = _rotate_xy(*_ROBOT_BEFORE_XY, _CLUSTER_YAW, _CLUSTER_CX, _CLUSTER_CY)
+_CES_XY = _rotate_xy(*_CES_BEFORE_XY, _CLUSTER_YAW, _CLUSTER_CX, _CLUSTER_CY)
+_TABLE_XY = _rotate_xy(*_TABLE_BEFORE_XY, _CLUSTER_YAW, _CLUSTER_CX, _CLUSTER_CY)
+_PROD_LOCAL_XY = _rz_xy(_PRODUCT_LOCAL_IDENTITY[0], _PRODUCT_LOCAL_IDENTITY[1], _CES_YAW)
+
+CES_SPAWN_POS = (_CES_XY[0], _CES_XY[1], CES_SPAWN_Z)
+CES_SPAWN_ROT = _yaw_quat(_CES_YAW)
+
+PRODUCT_POS = (
+    CES_SPAWN_POS[0] + _PROD_LOCAL_XY[0],
+    CES_SPAWN_POS[1] + _PROD_LOCAL_XY[1],
+    CES_SPAWN_POS[2] + _PRODUCT_LOCAL_IDENTITY[2],
 )
+PRODUCT_ROT = _yaw_quat(_CES_YAW + _PRODUCT_YAW_REL_CES)
 
-# Robot: further +Y, facing +X; stepped back along -X for more standoff.
-ROBOT_INIT_POS = (-4.00, -0.80, 0.8)
-ROBOT_INIT_ROT = (1.0, 0.0, 0.0, 0.0)  # face +X
+ROBOT_INIT_POS = (_ROBOT_XY[0], _ROBOT_XY[1], 0.8)
+ROBOT_INIT_ROT = _yaw_quat(_ROBOT_YAW_BEFORE + _CLUSTER_YAW)  # face -X
 
-# Table further -X.
-TABLE_SPAWN_POS = (-0.70 + _TABLE_X_SHIFT, -3.60, 0.0)  # (-3.70, -3.60, 0)
+# +X/+Y nudges the table away from the LoadingLine tray (上料口).
+_TABLE_XY_NUDGE = (0.45, 0.35)
+TABLE_SPAWN_POS = (_TABLE_XY[0] + _TABLE_XY_NUDGE[0], _TABLE_XY[1] + _TABLE_XY_NUDGE[1], 0.0)
+TABLE_SPAWN_ROT = _yaw_quat(_TABLE_YAW_BEFORE + _CLUSTER_YAW)
+
+# Trailing world camera: ~1.15 m behind the robot, looking along its -X heading.
+_WORLD_CAM_POS = (ROBOT_INIT_POS[0] + 1.15, ROBOT_INIT_POS[1] - 0.08, 2.30)
+_WORLD_CAM_ROT = (0.5, -0.5, -0.5, 0.5)  # ROS camera looking world -X
 
 
 def _hide_prim_tree(prim) -> None:
@@ -153,10 +189,125 @@ def cleanup_packing_table(env, env_ids=None):
         print(f"[ces_scene] packing table cleaned (HeavyDuty only) in {n_clean} env(s)")
 
 
+def _bind_physics_material(prim, shade_mat) -> int:
+    from pxr import Usd, UsdPhysics, UsdShade
+
+    n = 0
+    for p in Usd.PrimRange(prim):
+        if p.HasAPI(UsdPhysics.CollisionAPI):
+            UsdShade.MaterialBindingAPI.Apply(p).Bind(
+                shade_mat, UsdShade.Tokens.strongerThanDescendants
+            )
+            n += 1
+    return n
+
+
+def tune_product_grasp_physics(env, env_ids=None):
+    """Split friction: sticky Dex1 pads, slippery tray, moderate Product.
+
+    Combine-mode is max.  If Product itself is mu=10 it glues into the tray
+    and Dex1 cannot lift it.  Pads carry the high mu; Product/tray stay low.
+    """
+    del env_ids
+    mass_kg = 0.25
+    pad_mu_s, pad_mu_d = 12.0, 10.0
+    part_mu_s, part_mu_d = 0.80, 0.60
+    tray_mu_s, tray_mu_d = 0.15, 0.10
+    try:
+        obj = env.scene["object"]
+        view = obj.root_physx_view
+        masses = view.get_masses()
+        masses[:] = mass_kg
+        n = masses.shape[0]
+        import torch
+
+        view.set_masses(masses, torch.arange(n, device=masses.device))
+        print(f"[ces_scene] Product mass set to {mass_kg:.3f} kg")
+    except Exception as exc:
+        print(f"[ces_scene] Product mass write skipped: {exc}")
+
+    try:
+        import omni.usd
+        from pxr import UsdPhysics, UsdShade
+    except ImportError:
+        return
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return
+    for i in range(env.num_envs):
+        mat_path = f"/World/envs/env_{i}/ProductGraspMaterial"
+        mat_prim = stage.DefinePrim(mat_path, "Material")
+        mat = UsdPhysics.MaterialAPI.Apply(mat_prim)
+        mat.CreateStaticFrictionAttr(part_mu_s)
+        mat.CreateDynamicFrictionAttr(part_mu_d)
+        mat.CreateRestitutionAttr(0.0)
+        part_mat = UsdShade.Material(mat_prim)
+
+        pad_path = f"/World/envs/env_{i}/Dex1PadGraspMaterial"
+        pad_prim = stage.DefinePrim(pad_path, "Material")
+        pad_api = UsdPhysics.MaterialAPI.Apply(pad_prim)
+        pad_api.CreateStaticFrictionAttr(pad_mu_s)
+        pad_api.CreateDynamicFrictionAttr(pad_mu_d)
+        pad_api.CreateRestitutionAttr(0.0)
+        pad_mat = UsdShade.Material(pad_prim)
+
+        tray_path = f"/World/envs/env_{i}/TraySlipMaterial"
+        tray_prim = stage.DefinePrim(tray_path, "Material")
+        tray_api = UsdPhysics.MaterialAPI.Apply(tray_prim)
+        tray_api.CreateStaticFrictionAttr(tray_mu_s)
+        tray_api.CreateDynamicFrictionAttr(tray_mu_d)
+        tray_api.CreateRestitutionAttr(0.0)
+        tray_mat = UsdShade.Material(tray_prim)
+
+        product = stage.GetPrimAtPath(
+            f"/World/envs/env_{i}/CESMachine/Root/LoadingLine/Tray_Assembly_01/Product"
+        )
+        n_prod = _bind_physics_material(product, part_mat) if product.IsValid() else 0
+        if product.IsValid():
+            UsdPhysics.MassAPI.Apply(product).CreateMassAttr(mass_kg)
+
+        n_tray = 0
+        tray = stage.GetPrimAtPath(
+            f"/World/envs/env_{i}/CESMachine/Root/LoadingLine/Tray_Assembly_01"
+        )
+        if tray.IsValid():
+            from pxr import Usd, UsdPhysics as _Phys
+
+            for p in Usd.PrimRange(tray):
+                if "/Product" in str(p.GetPath()):
+                    continue
+                if p.HasAPI(_Phys.CollisionAPI):
+                    UsdShade.MaterialBindingAPI.Apply(p).Bind(
+                        tray_mat, UsdShade.Tokens.strongerThanDescendants
+                    )
+                    n_tray += 1
+
+        n_pad = 0
+        robot = stage.GetPrimAtPath(f"/World/envs/env_{i}/Robot")
+        if robot.IsValid():
+            from pxr import Usd, UsdPhysics as _Phys
+
+            for p in Usd.PrimRange(robot):
+                if "right_hand" not in str(p.GetPath()).lower():
+                    continue
+                if p.HasAPI(_Phys.CollisionAPI):
+                    UsdShade.MaterialBindingAPI.Apply(p).Bind(
+                        pad_mat, UsdShade.Tokens.strongerThanDescendants
+                    )
+                    n_pad += 1
+        print(
+            f"[ces_scene] friction pads={pad_mu_s}/{pad_mu_d} "
+            f"part={part_mu_s}/{part_mu_d} tray={tray_mu_s}/{tray_mu_d} "
+            f"product_cols={n_prod} tray_cols={n_tray} right_hand_cols={n_pad}"
+        )
+
+
 def ces_scene_startup(env, env_ids=None):
-    """Startup hook: hide walls + strip packing-table clutter."""
+    """Startup hook: hide walls, strip table clutter, make Product graspable."""
     hide_warehouse_walls(env, env_ids)
     cleanup_packing_table(env, env_ids)
+    tune_product_grasp_physics(env, env_ids)
 
 
 @configclass
@@ -171,13 +322,11 @@ class TableCESSceneCfgWH(InteractiveSceneCfg):
         ),
     )
 
-    # Bare HeavyDuty table; crates/container removed at startup.  Z-scale brings
-    # the tabletop down to LoadingLine underside height.
     packing_table = AssetBaseCfg(
         prim_path="/World/envs/env_.*/PackingTable",
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=list(TABLE_SPAWN_POS),
-            rot=[1.0, 0.0, 0.0, 0.0],
+            rot=list(TABLE_SPAWN_ROT),
         ),
         spawn=UsdFileCfg(
             usd_path=f"{project_root}/assets/objects/PackingTable/PackingTable.usd",
@@ -186,7 +335,7 @@ class TableCESSceneCfgWH(InteractiveSceneCfg):
         ),
     )
 
-    # Full CES + LoadingLine. Do NOT apply rigid_props on the root (nested Product RB).
+  
     ces_machine = AssetBaseCfg(
         prim_path="/World/envs/env_.*/CESMachine",
         init_state=AssetBaseCfg.InitialStateCfg(
@@ -214,9 +363,9 @@ class TableCESSceneCfgWH(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    # Overview of shifted CES (+X) / table (-X) / robot facing +X.
+    # Over-the-shoulder: behind the robot, looking -X at the CES front.
     world_camera = CameraBaseCfg.get_camera_config(
         prim_path="/World/PerspectiveCamera",
-        pos_offset=(-2.5, -4.5, 2.4),
-        rot_offset=(-0.2706, 0.6533, 0.6533, -0.2706),
+        pos_offset=_WORLD_CAM_POS,
+        rot_offset=_WORLD_CAM_ROT,
     )

@@ -7,7 +7,8 @@ handle, descend onto it, lift up).  To avoid step changes in the IK target -
 which would make the arm jerk and disturb the balancing whole-body policy - we
 interpolate between way-points over a fixed duration with an ease-in/ease-out
 profile.  Orientation targets are interpolated with spherical linear
-interpolation (slerp).
+interpolation (slerp) **per segment**, so a vertical descend can hold a grasp
+quaternion instead of spinning the wrist on the way down.
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ def slerp(q0: torch.Tensor, q1: torch.Tensor, s: float) -> torch.Tensor:
     close = (dot > 0.9995).squeeze(-1)
     if close.any():
         out[close] = lerp(q0[close], q1[close], s)
+        out[close] = out[close] / torch.norm(out[close], dim=-1, keepdim=True)
     far = ~close
     if far.any():
         theta = torch.acos(torch.clamp(dot[far], -1.0, 1.0))
@@ -48,7 +50,7 @@ def slerp(q0: torch.Tensor, q1: torch.Tensor, s: float) -> torch.Tensor:
         w0 = torch.sin((1.0 - s) * theta) / sin_theta
         w1 = torch.sin(s * theta) / sin_theta
         out[far] = w0 * q0[far] + w1 * q1[far]
-    out = out / torch.norm(out, dim=-1, keepdim=True)
+        out[far] = out[far] / torch.norm(out[far], dim=-1, keepdim=True)
     return out
 
 
@@ -57,16 +59,18 @@ class CartesianInterpolator:
 
     A single instance tracks one motion.  Call :meth:`reset` (two poses) or
     :meth:`reset_path` (a corner-turning path) when a new motion starts and
-    :meth:`step` every control cycle to advance the target.  Orientation always
-    interpolates once across the whole motion, not per segment.
+    :meth:`step` every control cycle to advance the target.
+
+    Orientation is interpolated **per segment**.  Passing only ``start_quat``
+    and ``goal_quat`` slerps on the first leg and then holds ``goal_quat``
+    (the usual approach-then-descend pattern).
     """
 
     def __init__(self, device: str):
         self.device = device
         self.points: list[torch.Tensor] = []
+        self.quats: list[torch.Tensor] = []
         self.bounds: list[float] = []      # cumulative segment end times
-        self.start_quat: torch.Tensor | None = None
-        self.goal_quat: torch.Tensor | None = None
         self.duration = 1.0
         self.elapsed = 0.0
         self._use_quat = False
@@ -87,6 +91,7 @@ class CartesianInterpolator:
         durations: list[float],
         start_quat: torch.Tensor | None = None,
         goal_quat: torch.Tensor | None = None,
+        quats: list[torch.Tensor] | None = None,
     ):
         """Interpolate through ``points``, spending ``durations[i]`` on each leg.
 
@@ -99,6 +104,8 @@ class CartesianInterpolator:
             durations: seconds to spend on each leg.
             start_quat: orientation at the start, or ``None`` for position only.
             goal_quat: orientation at the end, or ``None`` for position only.
+            quats: optional per-waypoint orientations (length ``len(points)``).
+                Overrides ``start_quat`` / ``goal_quat`` when given.
         """
         if len(points) != len(durations) + 1:
             raise ValueError(
@@ -113,19 +120,42 @@ class CartesianInterpolator:
             self.bounds.append(total)
         self.duration = total
         self.elapsed = 0.0
-        self._use_quat = start_quat is not None and goal_quat is not None
-        self.start_quat = start_quat.clone() if self._use_quat else None
-        self.goal_quat = goal_quat.clone() if self._use_quat else None
+
+        if quats is not None:
+            if len(quats) != len(points):
+                raise ValueError(
+                    f"[CartesianInterpolator] {len(points)} points needs "
+                    f"{len(points)} quats, got {len(quats)}"
+                )
+            self.quats = [q.clone() for q in quats]
+            self._use_quat = True
+        elif start_quat is not None and goal_quat is not None:
+            # first leg rotates to the goal, remaining legs hold it
+            n = len(points)
+            self.quats = [start_quat.clone()] + [goal_quat.clone() for _ in range(n - 1)]
+            self._use_quat = True
+        else:
+            self.quats = []
+            self._use_quat = False
+
+    @property
+    def has_path(self) -> bool:
+        return len(self.bounds) > 0 and len(self.points) >= 2
 
     @property
     def finished(self) -> bool:
+        if not self.has_path:
+            return True
         return self.elapsed >= self.duration
 
     def step(self, dt: float):
         """Advance by ``dt`` seconds and return the interpolated (pos, quat).
 
         ``quat`` is ``None`` when the motion carries no orientation target.
+        An empty path returns ``(None, None)`` instead of indexing ``bounds[0]``.
         """
+        if not self.has_path:
+            return None, None
         self.elapsed = min(self.duration, self.elapsed + dt)
         # locate the active leg, then ease within it so each corner is approached
         # and left smoothly
@@ -133,11 +163,12 @@ class CartesianInterpolator:
         while i < len(self.bounds) - 1 and self.elapsed > self.bounds[i]:
             i += 1
         leg_start = 0.0 if i == 0 else self.bounds[i - 1]
-        leg_len = self.bounds[i] - leg_start
-        pos = lerp(
-            self.points[i], self.points[i + 1], ease_in_out((self.elapsed - leg_start) / leg_len)
-        )
+        leg_len = max(1e-6, self.bounds[i] - leg_start)
+        s = ease_in_out((self.elapsed - leg_start) / leg_len)
+        pos = lerp(self.points[i], self.points[i + 1], s)
         quat = None
-        if self._use_quat:
-            quat = slerp(self.start_quat, self.goal_quat, ease_in_out(self.elapsed / self.duration))
+        if self._use_quat and i + 1 < len(self.quats):
+            quat = slerp(self.quats[i], self.quats[i + 1], s)
+        elif self._use_quat and self.quats:
+            quat = self.quats[-1]
         return pos, quat
