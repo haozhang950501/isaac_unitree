@@ -86,7 +86,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._err_logged = False
         self._err_t = -10.0
         print(
-            f"[CESGrasp] v7 friction-grasp station_mode=snap "
+            f"[CESGrasp] v8 drop-place station_mode=snap "
             f"pick_stand={tuple(round(x, 3) for x in C.PICK_STAND_XY)} "
             f"place_stand={tuple(round(x, 3) for x in C.PLACE_STAND_XY)} "
             f"(no TCP weld; Dex1 PD squeeze + pad friction)"
@@ -121,7 +121,11 @@ class CESGraspActionProvider(DDSRLActionProvider):
         return robot.data.joint_pos[:, self._right_arm_idx].clone()
 
     def _slew_arm(self, q_tgt: torch.Tensor) -> torch.Tensor:
-        lim = C.ARM_SLEW_RAD_LIFT if self._squeeze else C.ARM_SLEW_RAD
+        # Slow slew only while friction-lifting / carrying.  Place-approach
+        # still squeezes but must be able to reach the drop pose in time.
+        phase = self.fsm.phase.value
+        slow = self._squeeze and phase in ("lift", "carry", "hold", "goto_place")
+        lim = C.ARM_SLEW_RAD_LIFT if slow else C.ARM_SLEW_RAD
         dq = q_tgt - self._q_right
         dq = torch.clamp(dq, -lim, lim)
         self._q_right = self._q_right + dq

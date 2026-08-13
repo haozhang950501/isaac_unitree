@@ -66,8 +66,12 @@ GRASP_SHIFT_Y = 0.0  # world Y along the long axis; + is toward world +Y
 PRODUCT_HALF_Z = 0.01275
 GRASP_Z_CLEARANCE = 0.012
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.025, above the mounting step
-PLACE_APPROACH_HEIGHT = 0.10
-PLACE_CLEARANCE = 0.018  # object-root z above tabletop (half of 25.5 mm + 5 mm)
+# Drop-place: TCP stays well above the table.  Do not IK down onto the top
+# (Dex1 vs table contact makes the wrist shake).  Product bottom is ~38 mm
+# below TCP, so a 10 cm TCP height leaves ~6 cm of free fall.
+PLACE_APPROACH_HEIGHT = 0.0  # go straight to the release pose
+PLACE_CLEARANCE = 0.018  # unused for TCP; reward/termination still use tabletop
+PLACE_RELEASE_ABOVE_TABLE = 0.10
 
 SETTLE_TIME = 1.0
 # Snap mode pins the pelvis for the whole station stay.  Walk mode never
@@ -89,9 +93,9 @@ LIFT_TIME = 3.2
 CARRY_TIME = 0.6  # freeze the lift pose; do not Cartesian-tuck (that dumps the part)
 HOLD_TIME = 0.3
 PLACE_APPROACH_TIME = 2.8
-PLACE_DESCEND_TIME = 3.5
-RELEASE_TIME = 0.6
-RETRACT_TIME = 1.4
+PLACE_DESCEND_TIME = 0.0  # skipped: open at hover, let the part drop
+RELEASE_TIME = 0.8
+RETRACT_TIME = 0.8
 
 # Default hanging pose → this seed, then DiffIK to the vertical pre-grasp.
 # Order matches RIGHT_ARM_JOINTS.  Elbow ~90°, wrist starts pointing down.
@@ -171,7 +175,7 @@ PICK_STAND_XY = stand_xy(PICK_TARGET_XY, PICK_STAND_YAW, X_B_PICK, Y_B_PICK)
 PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
 PLACE_STAND_XY = stand_xy(PLACE_TARGET_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
-PLACE_Z = TABLE_TOP_Z + PLACE_CLEARANCE
+PLACE_Z = TABLE_TOP_Z + PLACE_RELEASE_ABOVE_TABLE
 
 # Walk vias stay east of CES (x > -2.95). Place via is in the aisle so the
 # robot can face the table, then walk body-forward (no reverse off the tray).
