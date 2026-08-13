@@ -89,6 +89,25 @@ parser.add_argument(
     action="store_true",
     help="start paused and control simulation from terminal (Enter/s: start, p: pause, r: reset, q: quit)",
 )
+parser.add_argument(
+    "--auto_ces_pick_place",
+    action="store_true",
+    help="autonomous CES LoadingLine Product pick-and-place (right Dex1)",
+)
+parser.add_argument(
+    "--station_mode",
+    type=str,
+    default="snap",
+    choices=["snap", "walk"],
+    help="CES FSM relocation: snap = teleport (default). walk is disabled and falls back to snap.",
+)
+parser.add_argument(
+    "--ces_stop_after",
+    type=str,
+    default="place",
+    choices=["lift", "place"],
+    help="CES FSM: stop after lifting the part, or run close-lift-hold-place (default)",
+)
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -107,6 +126,11 @@ if args_cli.enable_dex3_dds and args_cli.enable_dex1_dds and args_cli.enable_ins
 import pinocchio                 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+# Isaac Lab still calls deprecated quat_rotate every physics step (root vel).
+import isaaclab.utils.math as _isaaclab_math
+_isaaclab_math.quat_rotate = _isaaclab_math.quat_apply
+_isaaclab_math.quat_rotate_inverse = _isaaclab_math.quat_apply_inverse
 
 from layeredcontrol.robot_control_system import (
     RobotController, 
@@ -409,6 +433,10 @@ def main():
     env.sim.reset()
     env.reset()
 
+    if args_cli.auto_ces_pick_place:
+        args_cli.enable_wholebody_dds = True
+        args_cli.enable_dex1_dds = True
+
     # Optional viewport camera switch (default: none — keep editor Perspective).
     if not getattr(args_cli, "headless", False):
         set_viewport_camera(getattr(args_cli, "viewport_camera", "none"))
@@ -425,14 +453,18 @@ def main():
     
     # create controller
 
+    image_server = None
     if not args_cli.replay_data:
         print("========= create image server =========")
         try:
             image_server = run_isaacsim_server()
+            print("========= create image server success =========")
         except Exception as e:
             print(f"Failed to create image server: {e}")
-            return
-        print("========= create image server success =========")
+            print(
+                "Continuing without teleimager. If port 60000 is busy, kill the leftover "
+                "process:  fuser -k 60000/tcp"
+            )
         print("========= create dds =========")
         try:
             reset_pose_dds,sim_state_dds,dds_manager = create_dds_objects(args_cli,env)
@@ -460,11 +492,16 @@ def main():
     print(f"\ncreate action provider: {args_cli.action_source}...")
     try:
         print(f"args_cli.task: {args_cli.task}")
-        if not args_cli.replay_data and ("Wholebody" in args_cli.task or args_cli.enable_wholebody_dds):
+        if args_cli.auto_ces_pick_place:
+            args_cli.enable_wholebody_dds = True
+            args_cli.enable_dex1_dds = True
+            control_config.use_rl_action_mode = True
+            args_cli.action_source = "ces_grasp"
+        elif not args_cli.replay_data and ("Wholebody" in args_cli.task or args_cli.enable_wholebody_dds):
             args_cli.enable_wholebody_dds = True
             control_config.use_rl_action_mode = True
             args_cli.action_source = "dds_wholebody"
-        action_provider = create_action_provider(env,args_cli)
+        action_provider = create_action_provider(env, args_cli)
         if action_provider is None:
             print("action provider creation failed, exiting")
             return
@@ -541,9 +578,17 @@ def main():
                             print("[manual] simulation paused")
                         elif command in ("r", "reset"):
                             env.reset()
+                            if hasattr(env_cfg, "event_manager") and env_cfg.event_manager is not None:
+                                env_cfg.event_manager.trigger("reset_object_self", env)
+                            if hasattr(action_provider, "reset_task"):
+                                action_provider.reset_task()
+                            elif hasattr(action_provider, "fsm"):
+                                action_provider.fsm.reset()
+                            env.scene.write_data_to_sim()
+                            env.sim.forward()
                             env.sim.render()
                             simulation_paused = True
-                            print("[manual] scene reset; simulation paused")
+                            print("[manual] scene reset (robot + product); simulation paused")
                         elif command in ("q", "quit", "exit"):
                             print("[manual] stopping simulation")
                             controller.stop()
@@ -599,6 +644,8 @@ def main():
                             elif reset_category == '2' and not args_cli.enable_wholebody_dds:
                                 print("reset all")
                                 env_cfg.event_manager.trigger("reset_all_self", env)
+                                if hasattr(action_provider, "fsm"):
+                                    action_provider.fsm.reset()
                                 reset_pose_dds.write_reset_pose_command(-1)
                         except Exception as e:
                             print(f"Failed to write reset pose command: {e}")
@@ -682,7 +729,8 @@ def main():
         # clean up resources
         print("\nclean up resources...")
         controller.cleanup()
-        image_server.stop()
+        if image_server is not None:
+            image_server.stop()
         env.close()
         print("cleanup completed")
     # profiler.disable()

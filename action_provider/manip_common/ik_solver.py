@@ -21,6 +21,10 @@ This mirrors Isaac Lab's own :class:`DifferentialIKController` /
 * the world Jacobian is rotated into the robot **root** frame with
   ``R(base)^{-1}`` so it is consistent with a root-frame pose error.
 
+Optional ``tcp_offset`` is expressed in the EE body frame.  The tracked point
+is then ``p_tcp = p_ee + R(ee) * tcp_offset`` and the linear Jacobian is
+shifted by the rigid-body term ``-skew(r) J_ω``.
+
 Working entirely in the root frame keeps the tracking insensitive to the base
 translation/rotation that happens while the whole-body policy keeps the robot
 balanced and walking.
@@ -32,9 +36,20 @@ import torch
 from isaaclab.utils.math import (
     compute_pose_error,
     matrix_from_quat,
+    quat_apply,
     quat_inv,
     subtract_frame_transforms,
 )
+
+
+def _skew(v: torch.Tensor) -> torch.Tensor:
+    """Batch skew-symmetric matrices for ``v`` of shape [N, 3]."""
+    x, y, z = v[:, 0], v[:, 1], v[:, 2]
+    o = torch.zeros_like(x)
+    row0 = torch.stack((o, -z, y), dim=-1)
+    row1 = torch.stack((z, o, -x), dim=-1)
+    row2 = torch.stack((-y, x, o), dim=-1)
+    return torch.stack((row0, row1, row2), dim=-2)
 
 
 class ArmDiffIK:
@@ -49,12 +64,26 @@ class ArmDiffIK:
         damping: float = 0.08,
         gain: float = 1.0,
         max_delta_per_step: float = 0.06,
+        tcp_offset: tuple[float, float, float] | None = None,
+        w_pos: float = 1.0,
+        w_rot: float = 0.3,
+        max_iters: int = 6,
+        pos_tol: float = 0.005,
     ):
         self.robot = robot
         self.device = device
         self.damping = damping
         self.gain = gain
         self.max_delta = max_delta_per_step
+        self.w_pos = float(w_pos)
+        self.w_rot = float(w_rot)
+        self.max_iters = int(max_iters)
+        self.pos_tol = float(pos_tol)
+
+        if tcp_offset is None:
+            self.tcp_offset = torch.zeros(3, device=device)
+        else:
+            self.tcp_offset = torch.tensor(tcp_offset, device=device, dtype=torch.float32)
 
         # resolve joints (preserve the requested order, find_joints may reorder)
         joint_ids, joint_names = robot.find_joints(arm_joint_names, preserve_order=True)
@@ -86,13 +115,23 @@ class ArmDiffIK:
 
     # ------------------------------------------------------------------ FK --
     def get_ee_pose_w(self):
-        """Return the current end-effector pose in the world frame ([N,3],[N,4])."""
+        """Return the current end-effector body pose in the world frame ([N,3],[N,4])."""
         ee_pos_w = self.robot.data.body_pos_w[:, self.body_idx]
         ee_quat_w = self.robot.data.body_quat_w[:, self.body_idx]
         return ee_pos_w, ee_quat_w
 
+    def get_tcp_pose_w(self):
+        """Return the TCP pose in the world frame ([N,3],[N,4]).
+
+        Orientation matches the EE body; position is offset by ``tcp_offset``.
+        """
+        ee_pos_w, ee_quat_w = self.get_ee_pose_w()
+        n = ee_pos_w.shape[0]
+        tcp_pos_w = ee_pos_w + quat_apply(ee_quat_w, self.tcp_offset.expand(n, 3))
+        return tcp_pos_w, ee_quat_w
+
     def _jacobian_b(self) -> torch.Tensor:
-        """Geometric Jacobian (6 x num_joints) of the ee body, in the root frame."""
+        """Geometric Jacobian (6 x num_joints) of the TCP, in the root frame."""
         jac_w = self.robot.root_physx_view.get_jacobians()[
             :, self.jacobi_body_idx, :, self.jacobi_joint_ids
         ]
@@ -100,6 +139,14 @@ class ArmDiffIK:
         jac_b = jac_w.clone()
         jac_b[:, :3, :] = torch.bmm(base_rot, jac_w[:, :3, :])
         jac_b[:, 3:, :] = torch.bmm(base_rot, jac_w[:, 3:, :])
+
+        # J_v_tcp = J_v + ω × r  = J_v - skew(r) J_ω , r in the root frame
+        if float(self.tcp_offset.norm()) > 1e-8:
+            ee_pos_w, ee_quat_w = self.get_ee_pose_w()
+            n = ee_pos_w.shape[0]
+            r_w = quat_apply(ee_quat_w, self.tcp_offset.expand(n, 3))
+            r_b = torch.bmm(base_rot, r_w.unsqueeze(-1)).squeeze(-1)
+            jac_b[:, :3, :] = jac_b[:, :3, :] - torch.bmm(_skew(r_b), jac_b[:, 3:, :])
         return jac_b
 
     # ------------------------------------------------------------------ IK --
@@ -108,11 +155,11 @@ class ArmDiffIK:
         target_pos_w: torch.Tensor,
         target_quat_w: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute absolute joint-position targets that drive the ee to the goal.
+        """Compute absolute joint-position targets that drive the TCP to the goal.
 
         Args:
-            target_pos_w: desired ee position in world frame, shape [N, 3].
-            target_quat_w: optional desired ee orientation (w,x,y,z), shape [N, 4].
+            target_pos_w: desired TCP position in world frame, shape [N, 3].
+            target_quat_w: optional desired orientation (w,x,y,z), shape [N, 4].
                 When ``None`` only position (3-DoF) is tracked and the arm keeps
                 whatever orientation the redundancy resolution yields.
 
@@ -123,35 +170,52 @@ class ArmDiffIK:
         root_pos = robot.data.root_pos_w
         root_quat = robot.data.root_quat_w
 
-        ee_pos_w, ee_quat_w = self.get_ee_pose_w()
-        ee_pos_b, ee_quat_b = subtract_frame_transforms(root_pos, root_quat, ee_pos_w, ee_quat_w)
-        tgt_pos_b, tgt_quat_b = subtract_frame_transforms(root_pos, root_quat, target_pos_w, target_quat_w)
+        tcp_pos_w, tcp_quat_w = self.get_tcp_pose_w()
+        dummy_quat = tcp_quat_w if target_quat_w is None else target_quat_w
+        tcp_pos_b, tcp_quat_b = subtract_frame_transforms(root_pos, root_quat, tcp_pos_w, tcp_quat_w)
+        tgt_pos_b, tgt_quat_b = subtract_frame_transforms(root_pos, root_quat, target_pos_w, dummy_quat)
 
         jac_b = self._jacobian_b()
 
         if target_quat_w is not None:
             pos_err, rot_err = compute_pose_error(
-                ee_pos_b, ee_quat_b, tgt_pos_b, tgt_quat_b, rot_error_type="axis_angle"
+                tcp_pos_b, tcp_quat_b, tgt_pos_b, tgt_quat_b, rot_error_type="axis_angle"
             )
-            error = torch.cat((pos_err, rot_err), dim=1)  # [N,6]
-            jac = jac_b
+            error = torch.cat((self.w_pos * pos_err, self.w_rot * rot_err), dim=1)
+            w = torch.tensor(
+                [self.w_pos, self.w_pos, self.w_pos, self.w_rot, self.w_rot, self.w_rot],
+                device=self.device,
+                dtype=jac_b.dtype,
+            )
+            jac = jac_b * w.view(1, 6, 1)
         else:
-            error = tgt_pos_b - ee_pos_b  # [N,3]
-            jac = jac_b[:, 0:3, :]
+            error = self.w_pos * (tgt_pos_b - tcp_pos_b)
+            jac = jac_b[:, 0:3, :] * self.w_pos
 
-        jac_T = jac.transpose(1, 2)
-        n = jac.shape[1]
-        lam = (self.damping ** 2) * torch.eye(n, device=self.device)
-        dq = (jac_T @ torch.inverse(jac @ jac_T + lam) @ error.unsqueeze(-1)).squeeze(-1)
-        dq = self.gain * dq
-        dq = torch.clamp(dq, -self.max_delta, self.max_delta)
-
-        q_cur = robot.data.joint_pos[:, self.joint_ids]
-        q_des = q_cur + dq
-        q_des = torch.clamp(q_des, self.q_min, self.q_max)
-        return q_des
+        q = robot.data.joint_pos[:, self.joint_ids].clone()
+        n_err = jac.shape[1]
+        lam = (self.damping ** 2) * torch.eye(n_err, device=self.device, dtype=jac.dtype)
+        pos_dim = 3
+        for _ in range(max(1, self.max_iters)):
+            pos_norm = torch.norm(error[:, :pos_dim], dim=-1).max()
+            if float(pos_norm) < self.pos_tol:
+                break
+            jac_T = jac.transpose(1, 2)
+            dq = (jac_T @ torch.inverse(jac @ jac_T + lam) @ error.unsqueeze(-1)).squeeze(-1)
+            dq = torch.clamp(self.gain * dq, -self.max_delta, self.max_delta)
+            q = torch.clamp(q + dq, self.q_min, self.q_max)
+            # first-order residual (no extra physics FK between inner iters)
+            error = error - (jac @ dq.unsqueeze(-1)).squeeze(-1)
+        return q
 
     def position_error_norm(self, target_pos_w: torch.Tensor) -> float:
-        """Euclidean distance (m) between the ee and a world-frame target."""
-        ee_pos_w, _ = self.get_ee_pose_w()
-        return float(torch.norm(target_pos_w - ee_pos_w, dim=-1)[0].item())
+        """Euclidean distance (m) between the TCP and a world-frame target."""
+        tcp_pos_w, _ = self.get_tcp_pose_w()
+        return float(torch.norm(target_pos_w - tcp_pos_w, dim=-1)[0].item())
+
+    def joints_at_limit(self, margin: float = 0.02) -> int:
+        """Count arm joints parked within ``margin`` rad of a travel limit."""
+        q = self.robot.data.joint_pos[0, self.joint_ids]
+        lo = (q - self.q_min) < margin
+        hi = (self.q_max - q) < margin
+        return int((lo | hi).sum().item())

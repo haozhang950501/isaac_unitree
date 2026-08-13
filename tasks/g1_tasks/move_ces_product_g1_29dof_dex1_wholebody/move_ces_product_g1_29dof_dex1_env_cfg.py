@@ -12,6 +12,7 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
 
@@ -35,7 +36,7 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (  # isort: sk
 class ObjectTableSceneCfg(TableCESSceneCfgWH):
     """Adds the robot, cameras and contact sensors to the CES product scene."""
 
-    # Further +Y, facing +X.
+    # Compact cluster, facing -X toward CES after the +180° world yaw.
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_dex1_wholebody(
         init_pos=ROBOT_INIT_POS,
         init_rot=ROBOT_INIT_ROT,
@@ -82,7 +83,9 @@ class ObservationsCfg:
 
 @configclass
 class TerminationsCfg:
-    pass
+    """Episode ends if Product falls onto the warehouse floor."""
+
+    object_dropped = DoneTerm(func=mdp.object_dropped)
 
 
 @configclass
@@ -92,11 +95,15 @@ class RewardsCfg:
 
 @configclass
 class EventCfg:
-    """Startup: hide walls and strip packing-table clutter."""
+    """Startup: hide walls. Reset: restore robot + Product to authored poses."""
 
     ces_scene_startup = EventTerm(
         func=ces_scene_startup,
         mode="startup",
+    )
+    reset_scene = EventTerm(
+        func=mdp.reset_scene_to_default,
+        mode="reset",
     )
 
 
@@ -132,6 +139,9 @@ class MoveCESProductG129Dex1WholebodyEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
         self.sim.physx.friction_correlation_distance = 0.00625
 
+        # Same floor friction as Move-Cylinder wholebody.  Product grasp friction
+        # is set on the part itself in ces_scene_startup — do not make the floor sticky
+        # or the gait plants a foot and pitches over backwards.
         self.sim.physics_material.static_friction = 1.0
         self.sim.physics_material.dynamic_friction = 1.0
         self.sim.physics_material.friction_combine_mode = "max"
