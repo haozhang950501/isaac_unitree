@@ -67,12 +67,13 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 ```text
 SETTLE → GOTO_PICK(snap) → UNFOLD → APPROACH → DESCEND → GRASP
 → LIFT(~8 cm) → CARRY/HOLD(冻臂、PD 夹紧)
-→ GOTO_PLACE(snap 到桌边) → PLACE_APPROACH → PLACE_DESCEND → RELEASE → RETRACT
+→ GOTO_PLACE(snap 到桌边) → PLACE_APPROACH（桌面上约 10 cm）→ RELEASE（松爪自由落下）→ RETRACT
 ```
 
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
 - 夹住后：手臂改走 PD（不再瞬移关节），Dex1 只走 PD 闭合，靠垫面摩擦把件提起。
 - 换站：snap 瞬移骨盆；仅当骨盆真的跳了才把零件跟着平移（不是每帧焊 TCP）。
+- 放置：不到桌面接触。TCP 停在桌面上约 10 cm，冻臂后张开 Dex1，产品自由落到桌上（避免贴桌 IK 抖动）。
 - `r`：`env.reset()` + `reset_object_self` 把 Product 写回托盘，并 `CESGrasp.reset_task()`。
 
 ### 3.2 踩过的坑（不要再走）
@@ -87,6 +88,7 @@ SETTLE → GOTO_PICK(snap) → UNFOLD → APPROACH → DESCEND → GRASP
 | 闭合崩飞 | 夹爪运动学锁进网格 + `GRIPPER_CLOSED=0.026` 穿模 + 零件 μ=10 和托盘粘死 |
 | 一侧手指卡槽 | TCP 偏到上料口一侧；`GRASP_INSET` 收到 0.020，Z 再抬高 |
 | 夹不起来 | 零件 μ 不能和垫面一样高（combine=max 会粘托盘）；提升时不能 `write_joint_state` 把垫面瞬移开 |
+| 放置贴桌手腕剧抖 | `PLACE_Z` 过低，TCP/垫面磕桌面；DiffIK 在接触区振荡。改为桌面上 10 cm 松爪自由落下 |
 
 ### 3.3 关键路径
 
@@ -160,7 +162,8 @@ STAND_PELVIS_Z = 0.755
 pick  x_b=0.30  y_b=-0.38  yaw=π     stand ≈ (-3.19, -1.33)
 place x_b=0.46  y_b=-0.18  yaw=π/2   stand ≈ (-2.27, -0.77)
 PLACE_TARGET_XY = 桌中心 y-0.06 ≈ (-2.087, -0.312)  # 产品往桌内，避免半截露沿
-PLACE_Z = TABLE_TOP_Z + 0.018 ≈ 0.635
+PLACE_Z = TABLE_TOP_Z + 0.10 ≈ 0.717   # 松爪高度，产品再自由落约 6 cm
+# 不要再用 TABLE_TOP + 0.018 去贴桌，会抖
 ```
 
 ### 5.4 物理（摩擦拆开，combine=max）
@@ -180,7 +183,7 @@ Product 质量     0.25 kg
 ```text
 UNFOLD 3.2 s  ORIENT 2.2  SLIDE 2.4  DESCEND 2.0
 GRASP  3.0 s  LIFT 3.2    CARRY 0.6  HOLD 0.3
-PLACE_APPROACH 2.8  PLACE_DESCEND 3.5
+PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETRACT 0.8
 ```
 
 ---

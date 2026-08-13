@@ -14,10 +14,10 @@ Phases::
     CARRY           -> freeze that arm pose (do not retarget the wrist)
     HOLD            -> keep squeezing, arm joints locked
     GOTO_PLACE      -> snap-locate to the table stand (friction carry)
-    PLACE_APPROACH  -> after standing, reach over the table
-    PLACE_DESCEND   -> gentle lower onto the table
-    RELEASE         -> open gripper
-    RETRACT         -> lift away from the part
+    PLACE_APPROACH  -> after standing, reach over the table at drop height
+    PLACE_DESCEND   -> skipped (kept for enum compatibility)
+    RELEASE         -> freeze arm, open gripper, let the part fall onto the table
+    RETRACT         -> hold the frozen pose while the part settles
     DONE / FAILED
 """
 from __future__ import annotations
@@ -113,11 +113,12 @@ class CesPickPlaceStateMachine:
         self._q_unfold1: torch.Tensor | None = None
         self._q_carry0: torch.Tensor | None = None
         self._carry_arm_q: torch.Tensor | None = None
+        self._place_arm_q: torch.Tensor | None = None
         self._dbg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
         print(
-            f"[ces_fsm] v4 station_mode={self.station_mode} stop_after={self.stop_after} "
+            f"[ces_fsm] v5 drop-place station_mode={self.station_mode} stop_after={self.stop_after} "
             f"pick_stand=({C.PICK_STAND_XY[0]:.3f},{C.PICK_STAND_XY[1]:.3f}) "
             f"place_stand=({C.PLACE_STAND_XY[0]:.3f},{C.PLACE_STAND_XY[1]:.3f}) "
             f"x_b_place={C.X_B_PLACE:.2f} "
@@ -141,6 +142,7 @@ class CesPickPlaceStateMachine:
         self._q_unfold1 = None
         self._q_carry0 = None
         self._carry_arm_q = None
+        self._place_arm_q = None
         self._dbg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
@@ -192,7 +194,7 @@ class CesPickPlaceStateMachine:
         )
 
     def _squeezing(self) -> bool:
-        """True from lift through place-descend: jaws stay at GRIPPER_CLOSED."""
+        """True from lift through place-approach: jaws stay at GRIPPER_CLOSED."""
         if self.phase is CesPickPlacePhase.FAILED:
             return self._carry_arm_q is not None
         if self.phase is CesPickPlacePhase.DONE:
@@ -203,8 +205,21 @@ class CesPickPlaceStateMachine:
             CesPickPlacePhase.HOLD,
             CesPickPlacePhase.GOTO_PLACE,
             CesPickPlacePhase.PLACE_APPROACH,
-            CesPickPlacePhase.PLACE_DESCEND,
         )
+
+    def _place_drop_pos(self) -> torch.Tensor:
+        """TCP target at drop height (table + PLACE_RELEASE_ABOVE_TABLE)."""
+        if self._place_pos_w is None:
+            return torch.tensor(
+                [[C.PLACE_TARGET_XY[0], C.PLACE_TARGET_XY[1], C.PLACE_Z]],
+                device=self.device,
+            )
+        return self._place_pos_w
+
+    def _frozen_place_arm(self) -> torch.Tensor:
+        if self._place_arm_q is None:
+            self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
+        return self._place_arm_q
 
     def _offset_z(self, pos: torch.Tensor, dz: float) -> torch.Tensor:
         out = pos.clone()
@@ -606,12 +621,15 @@ class CesPickPlaceStateMachine:
                 q = self.ctx.get_right_arm_q()[0]
                 self._carry_arm_q = q.clone()
             if arrived:
-                print("[ces_fsm] at table stand — placing")
+                drop = self._place_drop_pos()
                 now, q_now = self.ctx.ik.get_tcp_pose_w()
-                hover = self._offset_z(self._place_pos_w, C.PLACE_APPROACH_HEIGHT)
+                print(
+                    f"[ces_fsm] at table stand — reach drop pose "
+                    f"z={float(drop[0, 2]):.3f} (no table contact)"
+                )
                 self.interp.reset(
                     now,
-                    hover,
+                    drop,
                     C.PLACE_APPROACH_TIME,
                     q_now,
                     self._place_quat_w,
@@ -621,34 +639,13 @@ class CesPickPlaceStateMachine:
 
         if self.phase is CesPickPlacePhase.PLACE_APPROACH:
             self.gripper = C.GRIPPER_CLOSED
+            drop = self._place_drop_pos()
             pos, quat = self.interp.step(self.ctx.dt)
             if pos is None or quat is None:
-                hover = self._offset_z(self._place_pos_w, C.PLACE_APPROACH_HEIGHT)
-                pos, quat = hover, self._place_quat_w
+                pos, quat = drop, self._place_quat_w
             if self.interp.finished or self.t > C.PLACE_APPROACH_TIME + 1.0:
-                hover = self._offset_z(self._place_pos_w, C.PLACE_APPROACH_HEIGHT)
-                self.interp.reset(
-                    hover,
-                    self._place_pos_w,
-                    C.PLACE_DESCEND_TIME,
-                    self._place_quat_w,
-                    self._place_quat_w,
-                )
-                self._transition(CesPickPlacePhase.PLACE_DESCEND)
-            return self._cmd(
-                tcp=pos,
-                quat=quat,
-                snap=True,
-                snap_xy=C.PLACE_STAND_XY,
-                snap_yaw=C.PLACE_STAND_YAW,
-            )
-
-        if self.phase is CesPickPlacePhase.PLACE_DESCEND:
-            self.gripper = C.GRIPPER_CLOSED
-            pos, quat = self.interp.step(self.ctx.dt)
-            if pos is None or quat is None:
-                pos, quat = self._place_pos_w, self._place_quat_w
-            if self.interp.finished or self.t > C.PLACE_DESCEND_TIME + 1.0:
+                self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
+                print("[ces_fsm] drop height reached — open gripper, let product fall")
                 self._transition(CesPickPlacePhase.RELEASE)
             return self._cmd(
                 tcp=pos,
@@ -658,16 +655,26 @@ class CesPickPlaceStateMachine:
                 snap_yaw=C.PLACE_STAND_YAW,
             )
 
+        if self.phase is CesPickPlacePhase.PLACE_DESCEND:
+            # Kept only as a fallback: never IK onto the tabletop.
+            self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
+            print("[ces_fsm] skip place-descend — release at current height")
+            self._transition(CesPickPlacePhase.RELEASE)
+            return self._cmd(
+                arm_q=self._place_arm_q,
+                snap=True,
+                snap_xy=C.PLACE_STAND_XY,
+                snap_yaw=C.PLACE_STAND_YAW,
+            )
+
         if self.phase is CesPickPlacePhase.RELEASE:
             self.gripper = C.GRIPPER_OPEN
+            q = self._frozen_place_arm()
             if self.t >= C.RELEASE_TIME:
-                now = self._place_pos_w
-                up = self._offset_z(now, C.PLACE_APPROACH_HEIGHT)
-                self.interp.reset(now, up, C.RETRACT_TIME, self._place_quat_w, self._place_quat_w)
                 self._transition(CesPickPlacePhase.RETRACT)
             return self._cmd(
-                tcp=self._place_pos_w,
-                quat=self._place_quat_w,
+                tcp=None,
+                arm_q=q,
                 snap=True,
                 snap_xy=C.PLACE_STAND_XY,
                 snap_yaw=C.PLACE_STAND_YAW,
@@ -675,15 +682,12 @@ class CesPickPlaceStateMachine:
 
         if self.phase is CesPickPlacePhase.RETRACT:
             self.gripper = C.GRIPPER_OPEN
-            pos, quat = self.interp.step(self.ctx.dt)
-            if pos is None or quat is None:
-                pos = self._offset_z(self._place_pos_w, C.PLACE_APPROACH_HEIGHT)
-                quat = self._place_quat_w
-            if self.interp.finished or self.t > C.RETRACT_TIME + 0.5:
+            q = self._frozen_place_arm()
+            if self.t >= C.RETRACT_TIME:
                 self._transition(CesPickPlacePhase.DONE)
             return self._cmd(
-                tcp=pos,
-                quat=quat,
+                tcp=None,
+                arm_q=q,
                 snap=True,
                 snap_xy=C.PLACE_STAND_XY,
                 snap_yaw=C.PLACE_STAND_YAW,
@@ -705,9 +709,10 @@ class CesPickPlaceStateMachine:
                 return self._cmd(
                     tcp=self._hold_lift_pos, quat=self._grasp_quat_w, done=True
                 )
+            q = self._place_arm_q if self._place_arm_q is not None else self._carry_arm_q
             return self._cmd(
                 tcp=None,
-                arm_q=self._carry_arm_q,
+                arm_q=q,
                 snap=True,
                 snap_xy=C.PLACE_STAND_XY,
                 snap_yaw=C.PLACE_STAND_YAW,
