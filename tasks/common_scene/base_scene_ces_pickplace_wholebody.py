@@ -4,9 +4,8 @@
 
 Layout:
 
-* One bare packing table (``SM_HeavyDutyPackingTable`` only — crates / container
-  hidden at startup).  Table-top Z is scaled to match the CES LoadingLine
-  underside.
+* Packing table Z-scaled to the CES LoadingLine underside, with the gray
+  ``container_h20`` tote kept on the top (crates still hidden).
 * Compact robot / CES / table cluster, then yaw **+180°** about the cluster
   XY centroid so the default viewport sees the robot from behind, looking at
   the machine front (same composition as the G1 trailing camera).
@@ -35,6 +34,10 @@ LOADING_LINE_BOTTOM_Z = 0.6173
 _TABLE_LOCAL_HEIGHT = 0.9941
 TABLE_SCALE_Z = LOADING_LINE_BOTTOM_Z / _TABLE_LOCAL_HEIGHT  # ≈ 0.621
 TABLE_TOP_Z = LOADING_LINE_BOTTOM_Z
+# Authored gray tote on the packing table (container_h20).  World height
+# follows the same Z scale as the table.
+_PLACE_TRAY_LOCAL_HEIGHT = 0.16
+PLACE_TRAY_HEIGHT = _PLACE_TRAY_LOCAL_HEIGHT * TABLE_SCALE_Z
 
 # ---------------------------------------------------------------------------
 # Compact cluster in the pre-rotation frame, then +180° about the XY centroid.
@@ -150,7 +153,7 @@ def hide_warehouse_walls(env, env_ids=None):
 
 
 def cleanup_packing_table(env, env_ids=None):
-    """Keep only ``SM_HeavyDutyPackingTable``; hide crates / container on the USD."""
+    """Keep the HeavyDuty table and gray tote; hide cardboard crates."""
     del env_ids
     try:
         import omni.usd
@@ -162,15 +165,12 @@ def cleanup_packing_table(env, env_ids=None):
     if stage is None:
         return
 
-    # Relative to each env's PackingTable root (UsdFileCfg defaultPrim = /Root).
     keep_name = "SM_HeavyDutyPackingTable_C02_01"
     n_clean = 0
     for i in range(env.num_envs):
         root = stage.GetPrimAtPath(f"/World/envs/env_{i}/PackingTable")
         if not root.IsValid():
             continue
-        # Hide every direct clutter sibling under SM_CratePacking_Table_A1 and
-        # the on-table container_h20; leave the HeavyDuty table prim alone.
         table_grp = stage.GetPrimAtPath(
             f"/World/envs/env_{i}/PackingTable/PackingTable_2/SM_CratePacking_Table_A1"
         )
@@ -179,14 +179,71 @@ def cleanup_packing_table(env, env_ids=None):
                 if child.GetName() == keep_name:
                     continue
                 _hide_prim_tree(child)
-        container = stage.GetPrimAtPath(
-            f"/World/envs/env_{i}/PackingTable/PackingTable_2/container_h20"
-        )
-        if container.IsValid():
-            _hide_prim_tree(container)
         n_clean += 1
     if n_clean:
-        print(f"[ces_scene] packing table cleaned (HeavyDuty only) in {n_clean} env(s)")
+        print(f"[ces_scene] packing table cleaned (table + gray tote) in {n_clean} env(s)")
+
+
+def _nudge_prim_world(prim, d_world) -> None:
+    """Add a local translate so the prim moves by ``d_world`` in world metres."""
+    from pxr import Gf, Usd, UsdGeom
+
+    parent = prim.GetParent()
+    if parent.IsValid():
+        parent_xf = UsdGeom.Xformable(parent).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        d_local = parent_xf.GetInverse().TransformDir(Gf.Vec3d(*d_world))
+    else:
+        d_local = Gf.Vec3d(*d_world)
+    xf = UsdGeom.Xformable(prim)
+    op = None
+    for existing in xf.GetOrderedXformOps():
+        if existing.GetOpName() == "xformOp:translate:placeNudge":
+            op = existing
+            break
+    if op is None:
+        op = xf.AddTranslateOp(opSuffix="placeNudge")
+    op.Set(d_local)
+
+
+def place_gray_tray_on_table(env, env_ids=None):
+    """Sit ``container_h20`` on the tabletop, centered toward the place target."""
+    del env_ids
+    try:
+        import omni.usd
+        from pxr import Usd, UsdGeom
+    except ImportError:
+        print("[ces_scene] omni.usd unavailable — cannot place gray tray")
+        return
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return
+    bbox = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+    want_x = TABLE_SPAWN_POS[0]
+    want_y = TABLE_SPAWN_POS[1] - 0.06
+    want_z0 = TABLE_TOP_Z + 0.002
+    n_place = 0
+    for i in range(env.num_envs):
+        prim = stage.GetPrimAtPath(
+            f"/World/envs/env_{i}/PackingTable/PackingTable_2/container_h20"
+        )
+        if not prim.IsValid():
+            continue
+        UsdGeom.Imageable(prim).MakeVisible()
+        rng = bbox.ComputeWorldBound(prim).ComputeAlignedRange()
+        if rng.IsEmpty():
+            continue
+        mn, mx = rng.GetMin(), rng.GetMax()
+        cx = 0.5 * (float(mn[0]) + float(mx[0]))
+        cy = 0.5 * (float(mn[1]) + float(mx[1]))
+        z0 = float(mn[2])
+        _nudge_prim_world(prim, (want_x - cx, want_y - cy, want_z0 - z0))
+        n_place += 1
+    if n_place:
+        print(
+            f"[ces_scene] gray tote on table xy=({want_x:.3f},{want_y:.3f}) "
+            f"z0={want_z0:.3f} in {n_place} env(s)"
+        )
 
 
 def _bind_physics_material(prim, shade_mat) -> int:
@@ -304,15 +361,16 @@ def tune_product_grasp_physics(env, env_ids=None):
 
 
 def ces_scene_startup(env, env_ids=None):
-    """Startup hook: hide walls, strip table clutter, make Product graspable."""
+    """Startup hook: hide walls, strip crates, seat the gray tote, tune grasp."""
     hide_warehouse_walls(env, env_ids)
     cleanup_packing_table(env, env_ids)
+    place_gray_tray_on_table(env, env_ids)
     tune_product_grasp_physics(env, env_ids)
 
 
 @configclass
 class TableCESSceneCfgWH(InteractiveSceneCfg):
-    """Warehouse room, one bare packing table, CES machine and pickable Product."""
+    """Warehouse room, scaled packing table with gray tote, CES, Product."""
 
     room_walls = AssetBaseCfg(
         prim_path="/World/envs/env_.*/Room",

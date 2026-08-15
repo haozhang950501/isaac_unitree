@@ -12,15 +12,15 @@
     "right_wrist_yaw_joint"
   ],
   "q": [
-    -1.24916,
-    -1.45824,
-    1.24627,
-    0.12,
-    0.40813,
-    -0.45199,
-    0.98468
+    -0.55,
+    -0.15,
+    0.22,
+    0.90,
+    0.20,
+    0.10,
+    0.35
   ],
-  "purpose": "Raise to the q10 working height while extending along pelvis +X, keeping the forearm clear of the right-front drawer.",
+  "purpose": "Chest-height forward reach. Natural elbow bend, no overhead lift, no side hook into the drawer.",
   "viewer_urdf": "C:\\Users\\Zedward\\Desktop\\Isaac\\urdf_pose_toolkit\\xr_teleoperate\\assets\\g1\\g1_body29_hand14.urdf",
   "ik_end": "right_hand_palm_joint",
   "palm_position_in_pelvis_m": [
@@ -71,30 +71,21 @@
     "xr_jaw_axis_to_pelvis_x_angle_deg": 51.621628,
     "xr_spread_to_body_minus_x_alignment": 0.620851911
   },
-  "source": "manual_urdf_viz",
-  "captured_at": "2026-08-15T19:57:12+08:00",
+  "source": "chest_height_forward",
+  "fk_stale": true,
+  "captured_at": "2026-08-15T22:10:00+08:00",
   "validation": {
-    "joint_limit_margin_rad": [
-      1.84004,
-      0.79326,
-      1.37173,
-      1.1672,
-      1.564092054,
-      1.162439558,
-      0.629749558
-    ],
-    "min_joint_limit_margin_rad": 0.629749558,
-    "joint_limit_violations": [],
     "previous_pose": "00_ready",
     "delta_from_previous_rad": [
-      -1.59916,
-      -1.27824,
-      1.24627,
-      -0.75,
-      0.40813,
-      -0.45199,
-      0.98468
+      -0.90,
+      0.03,
+      0.22,
+      0.03,
+      0.20,
+      0.10,
+      0.35
     ],
-    "max_abs_delta_from_previous_rad": 1.59916
+    "max_abs_delta_from_previous_rad": 0.90,
+    "note": "00->05 chest-height forward; right shift is 10->20"
   }
 }

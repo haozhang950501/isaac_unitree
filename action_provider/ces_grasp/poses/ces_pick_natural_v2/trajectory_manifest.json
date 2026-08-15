@@ -32,42 +32,42 @@
     {
       "from": "00_ready",
       "to": "05_forward_reach",
-      "duration_s": 1.4,
+      "duration_s": 1.1,
       "preview_control": "joint_smoothstep",
       "future_project_control": "joint_space"
     },
     {
       "from": "05_forward_reach",
       "to": "10_forward_lift_retract",
-      "duration_s": 1.4,
+      "duration_s": 0.85,
       "preview_control": "joint_smoothstep",
       "future_project_control": "joint_space"
     },
     {
       "from": "10_forward_lift_retract",
       "to": "20_right_shift_wrist_down",
-      "duration_s": 2.0,
+      "duration_s": 1.5,
       "preview_control": "joint_smoothstep",
       "future_project_control": "joint_space"
     },
     {
       "from": "20_right_shift_wrist_down",
       "to": "25_pre_grasp_xy_aligned",
-      "duration_s": 2.2,
+      "duration_s": 1.3,
       "preview_control": "joint_smoothstep",
       "future_project_control": "joint_space"
     },
     {
       "from": "25_pre_grasp_xy_aligned",
       "to": "30_pre_grasp_vertical",
-      "duration_s": 1.8,
+      "duration_s": 1.1,
       "preview_control": "joint_smoothstep",
       "future_project_control": "joint_space"
     },
     {
       "from": "30_pre_grasp_vertical",
       "to": "40_grasp_posture_ref",
-      "duration_s": 1.8,
+      "duration_s": 1.1,
       "preview_control": "q_ref_only_not_commanded",
       "future_project_control": "cartesian_vertical_ik_with_dynamic_q_ref"
     }
@@ -115,6 +115,7 @@
     ]
   },
   "validation": {
+    "forward_lift_fk_stale": true,
     "forward_lift_height_gain_m": 0.386698947,
     "forward_lift_x_change_m": 0.281896623,
     "right_shift_y_change_m": -0.106693631,
@@ -128,12 +129,12 @@
     "pre_grasp_proxy_z_error_m": 0.002299859,
     "pre_grasp_finger_down_angle_deg": 5.129111,
     "pre_grasp_jaw_axis_angle_deg": 67.886111,
-    "ready_to_lift_max_abs_joint_delta_rad": 1.59916,
+    "ready_to_lift_max_abs_joint_delta_rad": 1.3,
     "later_segments_max_abs_joint_delta_rad": 0.490472,
     "q_ref_wrist_max_abs_delta_rad": 0.0,
     "min_joint_limit_margin_rad": 0.148629358,
     "validation_passed": true,
     "violations": []
   },
-  "generated_at": "2026-08-15T20:10:09+08:00"
+  "generated_at": "2026-08-15T21:56:00+08:00"
 }
