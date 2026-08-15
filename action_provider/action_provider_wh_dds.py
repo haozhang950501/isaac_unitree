@@ -310,10 +310,18 @@ class DDSRLActionProvider(ActionProvider):
             ort_outs = model.run(None, ort_inputs)
             return torch.tensor(ort_outs[0], device=self.env.device)
         return run_inference
-    def compute_current_observations(self):
-        command = [0,0,0,0.8]  
-        run_command = self.run_command_dds.get_run_command()
-        if run_command and 'run_command' in run_command:
+    def compute_current_observations(self, command_override=None):
+        command = [0,0,0,0.8]
+        run_command = None
+        if command_override is not None:
+            try:
+                if len(command_override) >= 4:
+                    command = [float(command_override[i]) for i in range(4)]
+            except (TypeError, ValueError) as e:
+                print(f"[WARNING] invalid policy command override: {command_override}, error: {e}")
+        elif getattr(self, "run_command_dds", None) is not None:
+            run_command = self.run_command_dds.get_run_command()
+        if command_override is None and run_command and 'run_command' in run_command:
             run_command_data = run_command['run_command']
             
             if isinstance(run_command_data, str):
@@ -359,19 +367,39 @@ class DDSRLActionProvider(ActionProvider):
         dim=-1,
     )
         return current_actor_obs
-    def compute_observations(self):
+    def compute_observations(self, command_override=None):
 
-        current_actor_obs = self.compute_current_observations()
+        current_actor_obs = self.compute_current_observations(command_override)
 
         self.actor_obs_buffer.append(current_actor_obs)
         actor_obs = self.actor_obs_buffer.buffer.reshape(self.num_envs, -1)
         actor_obs = torch.clip(actor_obs, -self.clip_obs, self.clip_obs)
         return actor_obs
     
-    def run_policy(self):
-        current_actor_obs = self.compute_observations()
+    def run_policy(self, command_override=None):
+        current_actor_obs = self.compute_observations(command_override)
         action = self.policy(current_actor_obs)
         return action
+
+    def advance_action_history(self, full_action):
+        """Advance the policy action delay buffer with one full joint target."""
+        return self.action_buffer.compute(
+            full_action[self.old_action_indices].unsqueeze(0)
+        )
+
+    def apply_delayed_policy_legs(self, full_action, delayed_actions):
+        """Convert delayed policy offsets into articulation leg targets."""
+        clipped_actions = torch.clip(
+            delayed_actions[:, self.action_to_indices],
+            -self.clip_actions,
+            self.clip_actions,
+        ).to(self.env.device)
+        leg_targets = (
+            clipped_actions * self.action_scale
+            + self.default_action_positions[:, self.action_to_indices]
+        )
+        full_action[self.action_to_indices] = leg_targets.reshape(-1)
+
     def get_action(self, env) -> Optional[torch.Tensor]:
         """Get action from DDS"""
         try:
@@ -380,7 +408,7 @@ class DDSRLActionProvider(ActionProvider):
             action_data = self.run_policy()
 
             # RL 输出与腰部默认位姿
-            full_action[self.action_to_indices] = action_data
+            full_action[self.action_to_indices] = action_data.reshape(-1)
             full_action[self.waist_to_all_indices] = self.default_waist_positions
             # 机器人指令（若有）
             if self.enable_robot == "g129" and self.robot_dds:
@@ -392,9 +420,8 @@ class DDSRLActionProvider(ActionProvider):
                         arm_vals = self._positions_buf.index_select(0, self._arm_source_idx_t)
                         full_action.index_copy_(0, self._arm_target_idx_t, arm_vals)
             # 延时/裁剪/缩放
-            delayed_actions = self.action_buffer.compute(full_action[self.old_action_indices].unsqueeze(0))
-            cliped_actions = torch.clip(delayed_actions[:,self.action_to_indices], -self.clip_actions, self.clip_actions).to(self.env.device)
-            full_action[self.action_to_indices] = cliped_actions * self.action_scale + self.default_action_positions[:, self.action_to_indices]
+            delayed_actions = self.advance_action_history(full_action)
+            self.apply_delayed_policy_legs(full_action, delayed_actions)
             
             # 夹爪/手指（若有）
             if self.gripper_dds and hasattr(self, "_gripper_source_idx_t"):
