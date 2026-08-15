@@ -1,6 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""CES 取放动作：钉盆定位，Dex1 PD 夹持靠垫面摩擦起件，伸手时锁右臂。"""
+"""CES 取放动作：抓取定位，HOLD 后可用全身策略步行换站。"""
 from __future__ import annotations
 
 import math
@@ -19,7 +19,8 @@ class CESGraspActionProvider(DDSRLActionProvider):
         super().__init__(env, args_cli)
         self.name = "CESGrasp"
         self.dt = float(4 * env.physics_dt)
-        self.station_mode = "snap"
+        requested_station_mode = getattr(args_cli, "station_mode", "snap")
+        self.station_mode = requested_station_mode if requested_station_mode in ("snap", "walk") else "snap"
         self.ik = ArmDiffIK(
             env.scene["robot"],
             C.RIGHT_ARM_JOINTS,
@@ -84,7 +85,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._err_t = -10.0
         wp = "on" if self.fsm.use_joint_waypoints else "off"
         print(
-            f"[CESGrasp] v8 drop-place station_mode=snap "
+            f"[CESGrasp] v9 carry-walk station_mode={self.station_mode} "
             f"pick_stand={tuple(round(x, 3) for x in C.PICK_STAND_XY)} "
             f"place_stand={tuple(round(x, 3) for x in C.PLACE_STAND_XY)} "
             f"joint_waypoints={wp} "
@@ -98,9 +99,25 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._q_right = self._right_arm_default[0].clone()
         self._hold_xy = None
         self._hold_yaw = None
+        self.reset_walk_filt()
         self._err_logged = False
         self._err_t = -10.0
         print("[CESGrasp] task reset")
+
+    def reset_walk_filt(self):
+        """Reset the body-frame gait command ramp before releasing the pelvis."""
+        self._walk_cmd = [0.0, 0.0, 0.0, 0.8]
+
+    def _filter_walk_command(self, target) -> list[float]:
+        """Rate-limit gait commands so HOLD does not hand the policy a step input."""
+        target = [float(target[i]) for i in range(4)]
+        limits = (C.WALK_VX_ACCEL, C.WALK_VY_ACCEL, C.WALK_WZ_ACCEL)
+        for i, rate in enumerate(limits):
+            delta = target[i] - self._walk_cmd[i]
+            max_delta = rate * self.dt
+            self._walk_cmd[i] += max(-max_delta, min(max_delta, delta))
+        self._walk_cmd[3] = target[3]
+        return list(self._walk_cmd)
 
     # ------------------------------------------------------------------ ctx --
     @property
@@ -232,17 +249,41 @@ class CESGraspActionProvider(DDSRLActionProvider):
             if self.fsm.phase.value == "settle":
                 self._err_logged = False
 
-            if cmd.snap_xy is not None and cmd.snap_yaw is not None:
-                self._hold_xy, self._hold_yaw = cmd.snap_xy, cmd.snap_yaw
-            pin_xy = cmd.snap_xy if cmd.snap_xy is not None else self._hold_xy
-            pin_yaw = cmd.snap_yaw if cmd.snap_yaw is not None else self._hold_yaw
-            if pin_xy is None:
-                pin_xy, pin_yaw = C.SPAWN_STAND_XY, C.SPAWN_STAND_YAW
+            walk_active = self.station_mode == "walk" and cmd.guide
+            walk_failed_stop = (
+                self.station_mode == "walk"
+                and self.fsm.phase.value == "failed"
+                and self._squeeze
+            )
+            policy_active = walk_active or walk_failed_stop
 
-            self._walk_cmd = [0.0, 0.0, 0.0, 0.8]
+            if not cmd.guide and cmd.snap_xy is not None and cmd.snap_yaw is not None:
+                self._hold_xy, self._hold_yaw = cmd.snap_xy, cmd.snap_yaw
+            if policy_active:
+                pin_xy, pin_yaw = None, None
+            else:
+                pin_xy = cmd.snap_xy if cmd.snap_xy is not None else self._hold_xy
+                pin_yaw = cmd.snap_yaw if cmd.snap_yaw is not None else self._hold_yaw
+                if pin_xy is None:
+                    pin_xy, pin_yaw = C.SPAWN_STAND_XY, C.SPAWN_STAND_YAW
+
+            target_walk = cmd.walk if walk_active else [0.0, 0.0, 0.0, 0.8]
+            if policy_active:
+                self._filter_walk_command(target_walk)
+                policy_action = self.run_policy(self._walk_cmd)
+            else:
+                self.reset_walk_filt()
+                # Keep the ten-frame observation history warm before HOLD releases
+                # the pelvis; the policy then starts from real arm/body history.
+                self.compute_observations(self._walk_cmd)
+                policy_action = None
+
             full_action = self._full_action_buf
             full_action.zero_()
-            full_action[self.action_to_indices] = self._leg_default[0]
+            if policy_action is not None:
+                full_action[self.action_to_indices] = policy_action.reshape(-1)
+            else:
+                full_action[self.action_to_indices] = self._leg_default[0]
             full_action[self.waist_to_all_indices] = self.default_waist_positions[0]
             full_action[self._left_arm_idx] = self._left_arm_default[0]
             if cmd.arm_q is not None:
@@ -279,6 +320,15 @@ class CESGraspActionProvider(DDSRLActionProvider):
             full_action[self._right_grip_idx] = grip
             full_action[self._left_grip_idx] = C.GRIPPER_OPEN
 
+            history_action = full_action.clone()
+            if policy_action is None:
+                # The policy stores raw leg offsets in its action history, not
+                # the default-offset joint targets used while the pelvis is pinned.
+                history_action[self.action_to_indices] = 0.0
+            delayed_actions = self.advance_action_history(history_action)
+            if policy_action is not None:
+                self.apply_delayed_policy_legs(full_action, delayed_actions)
+
             lock_upper = (
                 cmd.arm_q is not None or cmd.tcp_pos is not None or self._squeeze
             )
@@ -286,7 +336,8 @@ class CESGraspActionProvider(DDSRLActionProvider):
             kinematic_arm = lock_upper and not self._squeeze
             robot = self.env.scene["robot"]
             for _ in range(4):
-                self._apply_snap(pin_xy, pin_yaw)
+                if pin_xy is not None and pin_yaw is not None:
+                    self._apply_snap(pin_xy, pin_yaw)
                 robot.set_joint_position_target(full_action)
                 if kinematic_arm:
                     self._write_locked_upper_body(full_action)

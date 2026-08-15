@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-15（Pick 优化完成：v2 路点抓取已跑通，放置仍为抬起姿态 IK + 高处松爪）
+更新时间：2026-08-16（Walk 世界系导航修正已接通代码：HOLD 后先转向、再正向行走；待 Isaac Sim 验收）
 
 ## 1. 项目概况
 
@@ -15,7 +15,9 @@
 | **当前主任务** | `Isaac-Move-CES-Product-G129-Dex1-Wholebody` |
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
-**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（v2 自然路点，已稳定）→ 胸口高度抬起 → **snap 定位换站** → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。走路换站仍未接通。
+**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（v2 自然路点，已稳定）→ 胸口高度抬起 → `snap` 或 HOLD 后 `walk` 换站 → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。Walk 代码已接入全身策略，Isaac Sim 夹持行走效果仍需验收。
+
+**归档状态（2026-08-16）**：导航开发待测试。代码与纯 CPU 导航测试已完成，下一步在 A10 / Isaac Sim 中验证原地右转、夹持稳定、产品不掉落和到站放置。
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
@@ -47,6 +49,8 @@ python sim_main.py \
 ```
 
 自然路点默认 `ces_pick_natural_v2`；可用 `--ces_waypoint_set ces_pick_natural_v1` 回退。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
+
+HOLD 后真实步行到放置站：把 `--station_mode snap` 改为 `--station_mode walk`。Pick 站定位仍用 snap，只有夹稳后的 `GOTO_PLACE` 释放骨盆并调用全身行走策略。
 
 改代码后必须关仿真重开（不会热更新）。端口占用：`fuser -k 60000/tcp`。WebRTC / `image_server` 报错可忽略。
 
@@ -200,11 +204,20 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
 
 ---
 
-## 6. 后续：walk 换站（未完成）
+## 6. Walk 换站（代码已接通，待 Isaac Sim 验收）
 
-当前 `--station_mode walk` 在 FSM 里会被改成 snap（`walk is disabled`）。
+`--station_mode walk` 不再回退到 snap。Pick 完成进入 HOLD 后，FSM 走 `PLACE_VIA_XY → PLACE_STAND_XY`；到达后钉住**实际到达位姿**继续放置，不做大幅末端瞬移。
 
-### 6.1 为什么现在不能走
+### 6.1 2026-08-16 方向问题根因与修正
+
+- 全身策略的 `[vx, vy, wz, height]` 是**机器人机体系**命令，`vx>0` 表示沿机器人自身 +X 前进，并不表示世界 `+X`。
+- CES 机器人初始 `yaw=π`、面向世界 `-X`；旧导航无论目标方向都发 `+vx`，因此会朝世界 `-X` 越走越远，看起来像「解锁骨盆后一直后退」。
+- 新导航先用世界路点计算 `desired_yaw=atan2(dy,dx)`，原地转到路径方向，再只发正 `vx` 前进；到桌边后再转到 `PLACE_STAND_YAW=π/2`。
+- 禁止负 `vx` 倒车；命令有加速度斜坡，行走中右臂保持 `_carry_arm_q`、Dex1 保持 `GRIPPER_CLOSED`，产品仍只靠垫面摩擦。
+- 行走时不调用 `_apply_snap`，不移动 Product root；到站稳定 0.35 s 后锁住实际骨盆位姿。
+- 纯 CPU 导航测试覆盖 `yaw=π → 世界 +X`、正向不倒车、终点转向和两段 CES 路径收敛；尚未在 A10/Isaac Sim 验证夹持稳定与产品是否掉落。
+
+### 6.2 仍需在 Isaac Sim 验收的风险
 
 全身 RL 策略按**默认垂臂站姿**训练。夹持后右臂前伸是 OOD：
 
@@ -216,17 +229,17 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
 - 键盘 `S` 能退，是因为手臂垂着、指令斜坡、策略一直控腿
 - 用户不要滑移、不要假迈步 overlay
 
-### 6.2 下次若做 walk，约束
+### 6.3 Walk 验收约束
 
 - [ ] 夹持姿态下策略仍能站稳（可能要冻腿为默认站姿、只让策略在垂臂时走路，或换/微调策略）
 - [ ] 夹爪全程 PD 闭合，产品靠摩擦跟着走，**不要焊 TCP**
 - [ ] 抬臂保持胸口高度，不要过顶
-- [ ] 命令机体系 `[vx,vy,wz]`；夹持后不要倒车硬退
+- [x] 命令机体系 `[vx,vy,wz]`；世界路点先转向，夹持后不倒车硬退
 - [ ] 路点绕开 CES（`PLACE_VIA_XY ≈ (-2.55, -1.25)`，x > -2.95）
 - [ ] 从 pick 站走到 place 站过程中不摔倒、件不掉
-- [ ] GUI 确认 spawn→抓取站、抓稳→桌边 两段走路
+- [ ] GUI 确认抓稳→桌边真实走路（本次只改 HOLD 后换站；spawn→抓取站仍为 snap）
 
-### 6.3 HOLD 快照（给 walk 到 place 的双足控制）
+### 6.4 HOLD 快照（给 walk 到 place 的双足控制）
 
 HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 和夹爪闭合，件靠摩擦跟着走。
 

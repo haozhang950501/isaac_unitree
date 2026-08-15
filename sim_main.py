@@ -99,7 +99,10 @@ parser.add_argument(
     type=str,
     default="snap",
     choices=["snap", "walk"],
-    help="CES FSM relocation: snap = teleport (default). walk is disabled and falls back to snap.",
+    help=(
+        "CES relocation after HOLD: snap = teleport (default); "
+        "walk = turn toward world-frame route and use the whole-body policy to walk to place"
+    ),
 )
 parser.add_argument(
     "--ces_stop_after",
