@@ -172,3 +172,71 @@ class CartesianInterpolator:
         elif self._use_quat and self.quats:
             quat = self.quats[-1]
         return pos, quat
+
+
+class JointSpaceInterpolator:
+    """Time-parameterized joint-space interpolation along a sequence of q.
+
+    Same timing model as :class:`CartesianInterpolator`: each leg spends
+    ``durations[i]`` seconds and eases with :func:`ease_in_out`.
+    """
+
+    def __init__(self, device: str):
+        self.device = device
+        self.points: list[torch.Tensor] = []
+        self.bounds: list[float] = []
+        self.duration = 1.0
+        self.elapsed = 0.0
+
+    def reset(self, start_q: torch.Tensor, goal_q: torch.Tensor, duration: float):
+        self.reset_path([start_q, goal_q], [duration])
+
+    def reset_path(self, qs: list[torch.Tensor], durations: list[float]):
+        if len(qs) != len(durations) + 1:
+            raise ValueError(
+                f"[JointSpaceInterpolator] {len(qs)} waypoints needs "
+                f"{len(qs) - 1} durations, got {len(durations)}"
+            )
+        self.points = [q.clone() for q in qs]
+        self.bounds = []
+        total = 0.0
+        for d in durations:
+            total += max(1e-3, float(d))
+            self.bounds.append(total)
+        self.duration = total
+        self.elapsed = 0.0
+
+    def clear(self):
+        self.points = []
+        self.bounds = []
+        self.duration = 1.0
+        self.elapsed = 0.0
+
+    @property
+    def has_path(self) -> bool:
+        return len(self.bounds) > 0 and len(self.points) >= 2
+
+    @property
+    def finished(self) -> bool:
+        if not self.has_path:
+            return True
+        return self.elapsed >= self.duration
+
+    @property
+    def progress(self) -> float:
+        if not self.has_path or self.duration <= 1e-9:
+            return 1.0
+        return min(1.0, self.elapsed / self.duration)
+
+    def step(self, dt: float) -> torch.Tensor | None:
+        """Advance by ``dt`` seconds and return the interpolated joint vector."""
+        if not self.has_path:
+            return None
+        self.elapsed = min(self.duration, self.elapsed + dt)
+        i = 0
+        while i < len(self.bounds) - 1 and self.elapsed > self.bounds[i]:
+            i += 1
+        leg_start = 0.0 if i == 0 else self.bounds[i - 1]
+        leg_len = max(1e-6, self.bounds[i] - leg_start)
+        s = ease_in_out((self.elapsed - leg_start) / leg_len)
+        return lerp(self.points[i], self.points[i + 1], s)

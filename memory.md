@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-13（CES pick&place 基本功能：snap 换站 + Dex1 摩擦抓取）
+更新时间：2026-08-15（CES 自然关节路点：`--ces_use_joint_waypoints`，已能抓取）
 
 ## 1. 项目概况
 
@@ -16,6 +16,8 @@
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
 **本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹 Product → 胸口高度抬起 → **snap 定位换站** → 放到 packing table。夹取靠垫面摩擦，不焊 TCP。走路换站仍未接通。
+
+**2026-08-15**：旧 FSM 保留。`--ces_use_joint_waypoints` 走 `ces_pick_natural_v1`：00→30 关节插补，到达 30 后真实 TCP/IK 垂直下落，30→40 只作零空间 `q_ref`。已能抓取；最终 TCP/姿态仍待 URDF-viz 重设计。
 
 ---
 
@@ -39,8 +41,11 @@ python sim_main.py \
   --enable_dex1_dds \
   --auto_ces_pick_place \
   --station_mode snap \
-  --manual_sim_control
+  --manual_sim_control \
+  --ces_use_joint_waypoints
 ```
+
+自然路点默认 `ces_pick_natural_v1`。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
 
 改代码后必须关仿真重开（不会热更新）。端口占用：`fuser -k 60000/tcp`。WebRTC / `image_server` 报错可忽略。
 
@@ -65,9 +70,9 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 ### 3.1 已跑通的流程
 
 ```text
-SETTLE → GOTO_PICK(snap) → UNFOLD → APPROACH → DESCEND → GRASP
-→ LIFT(~8 cm) → CARRY/HOLD(冻臂、PD 夹紧)
-→ GOTO_PLACE(snap 到桌边) → PLACE_APPROACH（桌面上约 10 cm）→ RELEASE（松爪自由落下）→ RETRACT
+开关开：SETTLE → GOTO_PICK → UNFOLD(00→30 关节) → DESCEND(锁XY、slerp朝向、落Z、q_ref 30→40) → GRASP
+开关关：SETTLE → GOTO_PICK → UNFOLD → APPROACH → DESCEND → GRASP
+之后相同：LIFT(~8 cm) → CARRY/HOLD → GOTO_PLACE(snap) → PLACE_APPROACH → RELEASE → RETRACT
 ```
 
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
@@ -89,6 +94,9 @@ SETTLE → GOTO_PICK(snap) → UNFOLD → APPROACH → DESCEND → GRASP
 | 一侧手指卡槽 | TCP 偏到上料口一侧；`GRASP_INSET` 收到 0.020，Z 再抬高 |
 | 夹不起来 | 零件 μ 不能和垫面一样高（combine=max 会粘托盘）；提升时不能 `write_joint_state` 把垫面瞬移开 |
 | 放置贴桌手腕剧抖 | `PLACE_Z` 过低，TCP/垫面磕桌面；DiffIK 在接触区振荡。改为桌面上 10 cm 松爪自由落下 |
+| 改 GRASP_SHIFT_Y / 追 AABB XY | 30 之后硬纠 TCP 会让腕肘大角度甩转。下降只锁 30 的 XY、只落 Z |
+| 30 后立刻切 `top_down_grasp_quat` | 第一帧姿态突变。应在 DESCEND 内从 q_now slerp 到产品朝向 |
+| 夹太深咬凹槽沿 | `GRASP_Z_CLEARANCE` 12→22 mm；最终 TCP Z 见 §10 |
 
 ### 3.3 关键路径
 
@@ -97,6 +105,8 @@ tasks/common_scene/base_scene_ces_pickplace_wholebody.py
 tasks/g1_tasks/move_ces_product_g1_29dof_dex1_wholebody/
 action_provider/manip_common/          # ArmDiffIK + CartesianInterpolator
 action_provider/ces_grasp/             # FSM + 站位常量
+action_provider/ces_grasp/pose_library.py
+action_provider/ces_grasp/poses/ces_pick_natural_v1/
 action_provider/action_provider_ces_grasp.py
 tools/inspect_ces_product.py
 tools/probe_ces_workspace.py
@@ -146,7 +156,7 @@ GRIPPER_CLOSED    =  0.019          # gap ≈ 12 mm；q 增大则闭合
 jaw 沿世界 X，手指（手 +Y）朝世界下
 GRASP_INSET       = 0.020           # 沿 -X 收进抽屉，避免 +X 指卡上料口槽
 GRASP_SHIFT_Y     = 0.0
-GRASP_Z_OFFSET    ≈ 0.025           # AABB 中心 + 半高 12.75 mm + 间隙 12 mm
+GRASP_Z_OFFSET    ≈ 0.035           # AABB 中心 + 半高 12.75 mm + 间隙 22 mm
 APPROACH_HEIGHT   = 0.080
 APPROACH_STANDOFF = 0.18
 LIFT_HEIGHT       = 0.08            # 胸口高度，不要过顶
@@ -250,7 +260,7 @@ unitree_sim_isaaclab/
 ├── action_provider/
 │   ├── create_action_provider.py
 │   ├── manip_common/
-│   ├── ces_grasp/
+│   ├── ces_grasp/                  # FSM + poses/ces_pick_natural_v1
 │   └── action_provider_ces_grasp.py
 ├── tools/
 │   ├── verify_ces_scene.py
@@ -266,3 +276,32 @@ unitree_sim_isaaclab/
 - `assets/` 在 `.gitignore` 中；CES USD 需 `git add -f`
 - `teleimager` 为子模块
 - 关闭仿真：终端 `q` / Ctrl+C；必要时 `pgrep -af sim_main.py`
+
+---
+
+## 10. 自然路点 / URDF-viz 目标（2026-08-15）
+
+开关：`--ces_use_joint_waypoints`。JSON 按**关节名**匹配，忽略 `viewer_urdf`。不改 DDS 下标。
+
+抓取站骨盆 `(-3.187, -1.330, 0.755)`，yaw=π。产品中心 ≈ `(-3.487, -0.950, 0.821)`。
+
+**Dex1 TCP（垫面中点，骨盆系）——给 URDF-viz 推掌心 / q：**
+
+| 阶段 | Dex1 TCP | XR 掌 (`right_hand_palm_joint`) |
+|---|---|---|
+| 30 预抓悬停 | `(0.320, -0.380, 0.181)` | `(0.320, -0.380, 0.296)` |
+| 40 最终夹取 | `(0.320, -0.380, 0.101)` | `(0.320, -0.380, 0.216)` |
+
+世界系夹取点：`(-3.507, -0.950, 0.856)`（中心 X−20 mm，Z+35 mm）。
+
+姿态：Dex1 +X=夹爪=世界 +X=骨盆 −X；+Y=手指朝下=骨盆 −Z。XR 掌 +X=手指下，+Z=夹爪沿骨盆 −X。
+
+运行时 30 后**锁 XY、只落 Z**，朝向 2 s slerp 到产品夹持姿态；40 只作 `q_ref`。
+
+### Codex TODO（本地重设计 `ces_pick_natural_v1`）
+
+- [ ] 在 URDF-viz 把 30 的 Dex1 TCP 对准 `(0.320, -0.380, 0.181)`，40 对准 `(0.320, -0.380, 0.101)`（掌心 Z 各 +0.115）
+- [ ] 30/40 朝向：手指朝下、夹爪平行产品 36 mm 世界 X 面；XY 两姿态保持一致，40 只降 Z
+- [ ] 重做 00→10→20→25→30 自然关节 q，按名写入 JSON；忽略 Windows `viewer_urdf`
+- [ ] 40 只当肩肘参考，不要靠 40 去纠另一个 TCP
+- [ ] 进仿真看 `[ces_fsm] AABB= ... grasp=`，用真实 AABB 微调几毫米
