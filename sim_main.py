@@ -108,6 +108,17 @@ parser.add_argument(
     choices=["lift", "place"],
     help="CES FSM: stop after lifting the part, or run close-lift-hold-place (default)",
 )
+parser.add_argument(
+    "--ces_use_joint_waypoints",
+    action="store_true",
+    help="CES pick: joint-space waypoints 00-30, then real TCP/IK descend with q_ref 30-40",
+)
+parser.add_argument(
+    "--ces_waypoint_set",
+    type=str,
+    default="ces_pick_natural_v1",
+    help="CES joint waypoint set under action_provider/ces_grasp/poses/",
+)
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()

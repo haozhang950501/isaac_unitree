@@ -10,11 +10,18 @@
 """
 
 from .ik_solver import ArmDiffIK
-from .interpolation import CartesianInterpolator, ease_in_out, lerp, slerp
+from .interpolation import (
+    CartesianInterpolator,
+    JointSpaceInterpolator,
+    ease_in_out,
+    lerp,
+    slerp,
+)
 
 __all__ = [
     "ArmDiffIK",
     "CartesianInterpolator",
+    "JointSpaceInterpolator",
     "ease_in_out",
     "lerp",
     "slerp",

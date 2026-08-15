@@ -64,8 +64,8 @@ GRASP_SHIFT_Y = 0.0  # world Y along the long axis; + is toward world +Y
 # AABB Z is mid-thickness (25.5 mm).  TCP a bit above the top face so the
 # pads pinch the upper rim and do not drive into the pocket.
 PRODUCT_HALF_Z = 0.01275
-GRASP_Z_CLEARANCE = 0.012
-GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.025, above the mounting step
+GRASP_Z_CLEARANCE = 0.022  # pinch the upper rim; 12 mm was deep enough to clip the groove lip
+GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
 # Drop-place: TCP stays well above the table.  Do not IK down onto the top
 # (Dex1 vs table contact makes the wrist shake).  Product bottom is ~38 mm
 # below TCP, so a 10 cm TCP height leaves ~6 cm of free fall.
@@ -106,6 +106,12 @@ RIGHT_ARM_CARRY = (1.15, -0.22, 0.0, 1.00, 0.0, 0.45, 0.0)
 ARM_SLEW_RAD = 0.080  # max |Δq| per control step (~4 rad/s at 50 Hz)
 ARM_SLEW_RAD_LIFT = 0.012  # keep pads on the part while friction-lifting
 STOP_AFTER = "place"
+
+# Optional authored joint path (see --ces_use_joint_waypoints).  Old FSM still
+# uses RIGHT_ARM_READY.  JSON q is matched by joint name, never DDS index.
+WAYPOINT_SET_DEFAULT = "ces_pick_natural_v1"
+WAYPOINT_LEAD_IN_TIME = 0.4
+WAYPOINT_LEAD_IN_TOL = 0.05  # skip lead-in when ||q_now - q00|| is below this
 
 # Walk mode slews the pelvis in the world XY (policy cannot be trusted at
 # yaw=π).  The ONNX gait only animates the legs.  Manipulation pins the root.

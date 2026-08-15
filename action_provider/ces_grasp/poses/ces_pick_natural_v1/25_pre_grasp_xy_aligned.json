@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "name": "25_pre_grasp_xy_aligned",
+  "unit": "rad",
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "q": [
+    -0.5313,
+    -1.3344,
+    0.0103,
+    0.5,
+    1.1477,
+    1.1825,
+    0.284
+  ],
+  "purpose": "Natural pre-grasp checkpoint with the Dex1 TCP proxy aligned to the product XY and pre-grasp height; orientation is intentionally not yet fully vertical.",
+  "viewer_urdf": "C:\\Users\\Zedward\\Desktop\\Isaac\\urdf_pose_toolkit\\xr_teleoperate\\assets\\g1\\g1_body29_hand14.urdf",
+  "ik_end": "right_hand_palm_joint",
+  "palm_position_in_pelvis_m": [
+    0.239720281,
+    -0.383048011,
+    0.25280759
+  ],
+  "palm_orientation": {
+    "quaternion_wxyz": [
+      0.912877285,
+      0.125152404,
+      0.386658139,
+      -0.038567098
+    ],
+    "rotation_matrix": [
+      [
+        0.698016125,
+        0.167196446,
+        0.696289335
+      ],
+      [
+        0.026368336,
+        0.96569891,
+        -0.258322137
+      ],
+      [
+        -0.715596395,
+        0.198673008,
+        0.669664719
+      ]
+    ],
+    "hand_y_down_alignment": -0.198673008
+  },
+  "dex1_two_finger_proxy": {
+    "frame_mapping": {
+      "xr_palm_+X": "dex1_hand_+Y_finger_direction",
+      "xr_palm_+Z": "dex1_hand_+X_jaw_axis"
+    },
+    "tcp_offset_along_xr_finger_m": 0.115,
+    "tcp_proxy_position_in_pelvis_m": [
+      0.319992135,
+      -0.380015653,
+      0.170514004
+    ],
+    "xr_finger_down_alignment": 0.715596395,
+    "xr_spread_to_body_minus_x_alignment": -0.696289335,
+    "ces_pregrasp_tcp_target_in_pelvis_m": [
+      0.32,
+      -0.38,
+      0.170524
+    ],
+    "ces_pregrasp_tcp_error_m": [
+      -0.000007865,
+      -0.000015653,
+      -0.000009996
+    ],
+    "ces_pregrasp_tcp_error_norm_m": 0.000020169
+  },
+  "source": "manual_urdf_viz",
+  "captured_at": "2026-08-15T11:28:17+08:00",
+  "validation": {
+    "joint_limit_margin_rad": [
+      2.5579,
+      0.9171,
+      2.6077,
+      1.5472,
+      0.824522054,
+      0.431929558,
+      1.330429558
+    ],
+    "min_joint_limit_margin_rad": 0.431929558,
+    "joint_limit_violations": [],
+    "previous_pose": "20_right_shift_wrist_down",
+    "delta_from_previous_rad": [
+      0.2187,
+      -0.5344,
+      0.1103,
+      -0.4,
+      1.1477,
+      0.9825,
+      0.284
+    ],
+    "max_abs_delta_from_previous_rad": 1.1477
+  }
+}

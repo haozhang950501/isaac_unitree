@@ -154,6 +154,8 @@ class ArmDiffIK:
         self,
         target_pos_w: torch.Tensor,
         target_quat_w: torch.Tensor | None = None,
+        q_ref: torch.Tensor | None = None,
+        q_ref_gain: float = 0.25,
     ) -> torch.Tensor:
         """Compute absolute joint-position targets that drive the TCP to the goal.
 
@@ -162,6 +164,11 @@ class ArmDiffIK:
             target_quat_w: optional desired orientation (w,x,y,z), shape [N, 4].
                 When ``None`` only position (3-DoF) is tracked and the arm keeps
                 whatever orientation the redundancy resolution yields.
+            q_ref: optional preferred posture, shape [num_joints] or [N, num_joints].
+                Applied only in the Jacobian null space; it never replaces the
+                TCP task update.
+            q_ref_gain: null-space step gain ``k`` in
+                ``dq = J^+ e + (I - J^+ J) k (q_ref - q)``.
 
         Returns:
             Desired joint positions for this arm, shape [N, num_joints].
@@ -193,19 +200,36 @@ class ArmDiffIK:
             jac = jac_b[:, 0:3, :] * self.w_pos
 
         q = robot.data.joint_pos[:, self.joint_ids].clone()
+        q_ref_b = None
+        if q_ref is not None:
+            q_ref_b = q_ref.to(device=q.device, dtype=q.dtype)
+            if q_ref_b.dim() == 1:
+                q_ref_b = q_ref_b.unsqueeze(0).expand_as(q)
         n_err = jac.shape[1]
+        n_j = jac.shape[2]
         lam = (self.damping ** 2) * torch.eye(n_err, device=self.device, dtype=jac.dtype)
+        eye_j = torch.eye(n_j, device=self.device, dtype=jac.dtype)
         pos_dim = 3
+        k_ref = float(q_ref_gain)
         for _ in range(max(1, self.max_iters)):
             pos_norm = torch.norm(error[:, :pos_dim], dim=-1).max()
-            if float(pos_norm) < self.pos_tol:
+            at_goal = float(pos_norm) < self.pos_tol
+            if at_goal and q_ref_b is None:
                 break
             jac_T = jac.transpose(1, 2)
-            dq = (jac_T @ torch.inverse(jac @ jac_T + lam) @ error.unsqueeze(-1)).squeeze(-1)
+            jjt_inv = torch.inverse(jac @ jac_T + lam)
+            dq = (jac_T @ jjt_inv @ error.unsqueeze(-1)).squeeze(-1)
+            if q_ref_b is not None:
+                # dq = J^+ e + (I - J^+ J) k (q_ref - q)  — null space only
+                j_plus = jac_T @ jjt_inv
+                null_proj = eye_j.unsqueeze(0) - torch.bmm(j_plus, jac)
+                dq = dq + (null_proj @ (k_ref * (q_ref_b - q)).unsqueeze(-1)).squeeze(-1)
             dq = torch.clamp(self.gain * dq, -self.max_delta, self.max_delta)
             q = torch.clamp(q + dq, self.q_min, self.q_max)
             # first-order residual (no extra physics FK between inner iters)
             error = error - (jac @ dq.unsqueeze(-1)).squeeze(-1)
+            if at_goal:
+                break
         return q
 
     def position_error_norm(self, target_pos_w: torch.Tensor) -> float:

@@ -41,6 +41,8 @@ class CESGraspActionProvider(DDSRLActionProvider):
             self,
             self.station_mode,
             stop_after=getattr(args_cli, "ces_stop_after", C.STOP_AFTER) or C.STOP_AFTER,
+            use_joint_waypoints=bool(getattr(args_cli, "ces_use_joint_waypoints", False)),
+            waypoint_set=getattr(args_cli, "ces_waypoint_set", None) or C.WAYPOINT_SET_DEFAULT,
         )
         robot = env.scene["robot"]
         self._right_arm_idx = list(self.ik.joint_ids)
@@ -85,10 +87,12 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._squeeze = False
         self._err_logged = False
         self._err_t = -10.0
+        wp = "on" if self.fsm.use_joint_waypoints else "off"
         print(
             f"[CESGrasp] v8 drop-place station_mode=snap "
             f"pick_stand={tuple(round(x, 3) for x in C.PICK_STAND_XY)} "
             f"place_stand={tuple(round(x, 3) for x in C.PLACE_STAND_XY)} "
+            f"joint_waypoints={wp} "
             f"(no TCP weld; Dex1 PD squeeze + pad friction)"
         )
 
@@ -255,7 +259,9 @@ class CESGraspActionProvider(DDSRLActionProvider):
                 )
             elif cmd.tcp_pos is not None:
                 try:
-                    q_des = self.ik.solve(cmd.tcp_pos, cmd.tcp_quat)
+                    q_des = self.ik.solve(
+                        cmd.tcp_pos, cmd.tcp_quat, q_ref=cmd.arm_q_ref
+                    )
                     full_action[self._right_arm_idx] = self._slew_arm(q_des[0])
                 except Exception as e:
                     if not self._err_logged:
