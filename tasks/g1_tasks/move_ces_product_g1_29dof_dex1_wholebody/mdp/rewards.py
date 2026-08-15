@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING
 from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
 
-from tasks.common_scene.base_scene_ces_pickplace_wholebody import TABLE_SPAWN_POS, TABLE_TOP_Z
+from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
+    PLACE_TRAY_HEIGHT,
+    TABLE_SPAWN_POS,
+    TABLE_TOP_Z,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -44,7 +48,7 @@ def compute_reward(
     half_y: float = 0.40,
     drop_height: float = 0.32,
     place_z_min: float = TABLE_TOP_Z + 0.01,
-    place_z_max: float = TABLE_TOP_Z + 0.22,
+    place_z_max: float = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.12,
 ) -> torch.Tensor:
     interval = getattr(env, "_reward_interval", 1) or 1
     counter = getattr(env, "_reward_counter", 0)

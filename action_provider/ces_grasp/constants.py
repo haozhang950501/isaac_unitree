@@ -1,28 +1,23 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""CES LoadingLine product pick-and-place constants.
-
-Stand poses are derived from the scene Product / table poses and the measured
-right-arm sweet spot in the pelvis frame:
-
-    stand_xy = target_xy - (x_b * forward + y_b * left)
-"""
+"""CES 取放常量。站位：stand_xy = target_xy - (x_b*前 + y_b*左)。"""
 from __future__ import annotations
 
 import math
 
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
+    PLACE_TRAY_HEIGHT,
     PRODUCT_POS,
     ROBOT_INIT_POS,
     TABLE_SPAWN_POS,
     TABLE_TOP_Z,
 )
 
-# Dex1: q increases → jaws close.  gap ≈ 0.050 - 2q (m)
-# Product AABB 36 x 138.5 x 25.5 mm; pinch the 36 mm world-X face, fingers down.
+# Dex1：q 增大则闭合。gap ≈ 0.050 - 2q (m)
+# 产品 AABB 36×138.5×25.5 mm；夹世界 X 短边，手指朝下。
 TCP_LOCAL = (0.0, 0.115, 0.0)
 GRIPPER_OPEN = -0.010
-GRIPPER_CLOSED = 0.019  # gap ≈ 12 mm; PD squeeze without punching through
+GRIPPER_CLOSED = 0.019  # gap ≈ 12 mm
 STAND_PELVIS_Z = 0.755
 
 EE_BODY = "right_hand_base_link"
@@ -47,37 +42,28 @@ LEFT_ARM_JOINTS = [
 RIGHT_GRIPPER_JOINTS = ["right_hand_Joint1_1", "right_hand_Joint2_1"]
 LEFT_GRIPPER_JOINTS = ["left_hand_Joint1_1", "left_hand_Joint2_1"]
 
-# Stand closer so the right arm can reach deeper into the tray.
+# 站位：target - (x_b*前 + y_b*左)。抓取站靠近托盘，右手能伸进上料口。
 X_B_PICK = 0.30
 Y_B_PICK = -0.38
-Z_B_PICK = 0.066
 X_B_PLACE = 0.46
 Y_B_PLACE = -0.18
 
-# Slide in above the lip with fingers already vertical, then drop onto Product.
 APPROACH_HEIGHT = 0.080
-LIFT_HEIGHT = 0.08  # just above tray; chest height, not shoulder
-APPROACH_STANDOFF = 0.18  # rotate to vertical fully outside the pocket
-LIFT_RETRACT = 0.04  # tiny XY clear; do not IK-retract (that flips the arm up)
-GRASP_INSET = 0.020  # world -X into the drawer; 10 mm left the +X jaw in the mouth slot
-GRASP_SHIFT_Y = 0.0  # world Y along the long axis; + is toward world +Y
-# AABB Z is mid-thickness (25.5 mm).  TCP a bit above the top face so the
-# pads pinch the upper rim and do not drive into the pocket.
+LIFT_HEIGHT = 0.08  # 刚过托盘沿，胸口高度
+APPROACH_STANDOFF = 0.18
+# 抬起时 TCP 往左（pick yaw=π 时世界 -Y），前臂躲开抽屉沿，朝向不变。
+LIFT_SHIFT_Y = -0.06
+GRASP_INSET = 0.020  # 世界 -X 收进抽屉，避免 +X 指卡槽
+GRASP_SHIFT_Y = 0.0
 PRODUCT_HALF_Z = 0.01275
-GRASP_Z_CLEARANCE = 0.022  # pinch the upper rim; 12 mm was deep enough to clip the groove lip
+GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
-# Drop-place: TCP stays well above the table.  Do not IK down onto the top
-# (Dex1 vs table contact makes the wrist shake).  Product bottom is ~38 mm
-# below TCP, so a 10 cm TCP height leaves ~6 cm of free fall.
-PLACE_APPROACH_HEIGHT = 0.0  # go straight to the release pose
-PLACE_CLEARANCE = 0.018  # unused for TCP; reward/termination still use tabletop
-PLACE_RELEASE_ABOVE_TABLE = 0.10
+# 放置：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
+PLACE_RELEASE_ABOVE_TABLE = 0.08
 
 SETTLE_TIME = 1.0
-# Snap mode pins the pelvis for the whole station stay.  Walk mode never
-# pins: same as DDSRLActionProvider / Move-Cylinder — policy balances.
 STAND_MIN_TIME = 0.6
-STAND_STABLE_TIME = 0.5    # consecutive seconds of "standing"
+STAND_STABLE_TIME = 0.5
 STAND_TILT_MAX = 0.18
 STAND_YAW_RATE_MAX = 0.45
 STAND_XY_SPEED_MAX = 0.12
@@ -85,48 +71,40 @@ APPROACH_TIME = 2.8
 UNFOLD_TIME = 3.2
 ORIENT_TIME = 2.2
 SLIDE_TIME = 2.4
-DESCEND_TIME = 2.0
-GRASP_TIME = 3.0
-GRASP_POS_TOL = 0.055  # visual alignment is tighter than TCP residual
-GRASP_WAIT_MAX = 3.0
-LIFT_TIME = 3.2
-CARRY_TIME = 0.6  # freeze the lift pose; do not Cartesian-tuck (that dumps the part)
+DESCEND_TIME = 1.1
+GRASP_TIME = 1.0
+GRASP_POS_TOL = 0.055
+GRASP_WAIT_MAX = 0.6
+LIFT_TIME = 2.2
+CARRY_TIME = 0.6  # 冻抬起 q，不要再笛卡尔收臂（件会掉）
 HOLD_TIME = 0.3
 PLACE_APPROACH_TIME = 2.8
-PLACE_DESCEND_TIME = 0.0  # skipped: open at hover, let the part drop
+# snap 后若 TCP 已靠近放置点，只落 Z，避免长距离追 XY 拧臂。
+PLACE_HOLD_XY_M = 0.40
+PLACE_DESCEND_TIME = 0.0  # 跳过：悬停松爪，件自由落下
 RELEASE_TIME = 0.8
 RETRACT_TIME = 0.8
 
-# Default hanging pose → this seed, then DiffIK to the vertical pre-grasp.
-# Order matches RIGHT_ARM_JOINTS.  Elbow ~90°, wrist starts pointing down.
+# 旧 FSM 垂臂种子，顺序同 RIGHT_ARM_JOINTS。
 RIGHT_ARM_READY = (0.40, -0.42, 0.18, 1.20, 0.0, 0.95, 0.0)
-# Shoulder-height carry (pitch ~66°).  Keep roll close to the WB default so
-# the torso does not lean; elbow bent so the hand sits at the shoulder, not overhead.
-RIGHT_ARM_CARRY = (1.15, -0.22, 0.0, 1.00, 0.0, 0.45, 0.0)
-ARM_SLEW_RAD = 0.080  # max |Δq| per control step (~4 rad/s at 50 Hz)
-ARM_SLEW_RAD_LIFT = 0.012  # keep pads on the part while friction-lifting
+ARM_SLEW_RAD = 0.080
+ARM_SLEW_RAD_LIFT = 0.012  # 夹持后慢跟，垫面不瞬移
 STOP_AFTER = "place"
 
-# Optional authored joint path (see --ces_use_joint_waypoints).  Old FSM still
-# uses RIGHT_ARM_READY.  JSON q is matched by joint name, never DDS index.
+# 路点 JSON 按关节名匹配，不改 DDS 下标。抓取：00→30 硬 q，30→40 只作 q_ref。
 WAYPOINT_SET_DEFAULT = "ces_pick_natural_v2"
-WAYPOINT_LEAD_IN_TIME = 0.4
-WAYPOINT_LEAD_IN_TOL = 0.05  # skip lead-in when ||q_now - q00|| is below this
+WAYPOINT_LEAD_IN_TIME = 0.25
+WAYPOINT_LEAD_IN_TOL = 0.05
 
-# Walk mode slews the pelvis in the world XY (policy cannot be trusted at
-# yaw=π).  The ONNX gait only animates the legs.  Manipulation pins the root.
+# walk 仍未接通；下列给以后双足换站用。
 WALK_PLACE_TIMEOUT = 50.0
 WALK_GOTO_TIMEOUT = 20.0
 WALK_POS_ARRIVE = 0.06
 WALK_YAW_ARRIVE = 0.12
-WALK_GUIDE_SPEED = 0.28  # m/s along the world-XY line to the stand
-WALK_GUIDE_YAW_RATE = 0.90  # rad/s
-WALK_ANIM_VX = 0.20  # body-vx shown to the policy so the feet cycle
+WALK_GUIDE_SPEED = 0.28
+WALK_GUIDE_YAW_RATE = 0.90
+WALK_ANIM_VX = 0.20
 WALK_ARRIVE_HOLD = 0.35
-
-CARRY_OFFSET_B = (0.40, -0.22, 0.16)
-# Pre-extend the right arm so DiffIK is not starting from a folded pose.
-READY_OFFSET_B = (0.42, -0.24, 0.14)
 
 
 def heading_yaw(root_quat) -> float:
@@ -166,9 +144,7 @@ def stand_xy(target_xy: tuple[float, float], yaw: float, x_b: float, y_b: float)
     )
 
 
-# Pick: stand left of the tray so the right arm unfolds into the mouth.
-# Yaw π = face -X (cluster is yawed +180°).  Walk commands stay in the body
-# frame, so this heading is fine — do not treat world +X as "forward".
+# 抓取站在托盘左侧，右手伸进上料口。yaw=π 朝 -X（整簇已转 +180°）。
 SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
 SPAWN_STAND_YAW = math.pi
 
@@ -176,20 +152,17 @@ PICK_STAND_YAW = math.pi
 PICK_TARGET_XY = (PRODUCT_POS[0], PRODUCT_POS[1])
 PICK_STAND_XY = stand_xy(PICK_TARGET_XY, PICK_STAND_YAW, X_B_PICK, Y_B_PICK)
 
-# Place on the table top, inset from the south lip.  Product long axis is
-# ~139 mm along world Y; the old y=-0.50 sat on the edge and left half hanging.
+# 放置站面向桌子（yaw=π/2）。目标往桌内收 6 cm，避免件露沿。
 PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
 PLACE_STAND_XY = stand_xy(PLACE_TARGET_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
-PLACE_Z = TABLE_TOP_Z + PLACE_RELEASE_ABOVE_TABLE
+PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
 
-# Walk vias stay east of CES (x > -2.95). Place via is in the aisle so the
-# robot can face the table, then walk body-forward (no reverse off the tray).
+# walk 绕开 CES（x > -2.95），过道里再转向桌子。
 PICK_VIA_XY = (ROBOT_INIT_POS[0] - 0.15, -1.70)
 PLACE_VIA_XY = (-2.55, -1.25)
 
-# Reward / termination boxes (world).  Table AABB x[-3.32,-0.85] y[-0.63,0.13].
 TABLE_REWARD_HALF_XY = (1.15, 0.40)
 DROP_HEIGHT = 0.32
 PLACE_HEIGHT_MIN = TABLE_TOP_Z + 0.01
-PLACE_HEIGHT_MAX = TABLE_TOP_Z + 0.22
+PLACE_HEIGHT_MAX = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.12

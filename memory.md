@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-15（CES 自然关节路点：`--ces_use_joint_waypoints`，已能抓取）
+更新时间：2026-08-15（Pick 优化完成：v2 路点抓取已跑通，放置仍为抬起姿态 IK + 高处松爪）
 
 ## 1. 项目概况
 
@@ -15,9 +15,9 @@
 | **当前主任务** | `Isaac-Move-CES-Product-G129-Dex1-Wholebody` |
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
-**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹 Product → 胸口高度抬起 → **snap 定位换站** → 放到 packing table。夹取靠垫面摩擦，不焊 TCP。走路换站仍未接通。
+**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（v2 自然路点，已稳定）→ 胸口高度抬起 → **snap 定位换站** → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。走路换站仍未接通。
 
-**2026-08-15**：旧 FSM 和 `ces_pick_natural_v1` 保留。默认自然轨迹已切换为 `ces_pick_natural_v2`：00→05→10→20→25→30 关节插补，到达 30 后真实 TCP/IK 垂直下落，30→40 只作零空间 `q_ref`。v2 已完成本地 URDF-viz 姿态设计与连续回放，尚未在阿里云 IsaacLab 验证。
+**2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
 ---
 
@@ -73,13 +73,13 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 ```text
 开关开：SETTLE → GOTO_PICK → UNFOLD(00→30 关节) → DESCEND(锁XY、slerp朝向、落Z、q_ref 30→40) → GRASP
 开关关：SETTLE → GOTO_PICK → UNFOLD → APPROACH → DESCEND → GRASP
-之后相同：LIFT(~8 cm) → CARRY/HOLD → GOTO_PLACE(snap) → PLACE_APPROACH → RELEASE → RETRACT
+之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → CARRY/HOLD → GOTO_PLACE(snap) → PLACE_APPROACH(抬起姿态 IK，多半只落 Z) → RELEASE → RETRACT
 ```
 
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
 - 夹住后：手臂改走 PD（不再瞬移关节），Dex1 只走 PD 闭合，靠垫面摩擦把件提起。
 - 换站：snap 瞬移骨盆；仅当骨盆真的跳了才把零件跟着平移（不是每帧焊 TCP）。
-- 放置：不到桌面接触。TCP 停在桌面上约 10 cm，冻臂后张开 Dex1，产品自由落到桌上（避免贴桌 IK 抖动）。
+- 放置：不到桌面接触。snap 后从抬起姿态 IK（锁朝向，`q_ref=lift`；已在桌上方则只落 Z），TCP 停在灰筐沿上方约 8 cm，冻臂后张开 Dex1，产品自由落。
 - `r`：`env.reset()` + `reset_object_self` 把 Product 写回托盘，并 `CESGrasp.reset_task()`。
 
 ### 3.2 踩过的坑（不要再走）
@@ -161,9 +161,10 @@ GRASP_Z_OFFSET    ≈ 0.035           # AABB 中心 + 半高 12.75 mm + 间隙 2
 APPROACH_HEIGHT   = 0.080
 APPROACH_STANDOFF = 0.18
 LIFT_HEIGHT       = 0.08            # 胸口高度，不要过顶
+LIFT_SHIFT_Y      = -0.06           # pick yaw=π 时世界 -Y，躲开抽屉沿
 RIGHT_ARM_READY   = (0.40, -0.42, 0.18, 1.20, 0.0, 0.95, 0.0)
 ARM_SLEW_RAD      = 0.080           # 伸手
-ARM_SLEW_RAD_LIFT = 0.012           # 夹持提升，垫面跟着走
+ARM_SLEW_RAD_LIFT = 0.012           # 仅 carry/hold/goto_place；lift 走规划轨迹
 ```
 
 ### 5.3 站位
@@ -173,8 +174,8 @@ STAND_PELVIS_Z = 0.755
 pick  x_b=0.30  y_b=-0.38  yaw=π     stand ≈ (-3.19, -1.33)
 place x_b=0.46  y_b=-0.18  yaw=π/2   stand ≈ (-2.27, -0.77)
 PLACE_TARGET_XY = 桌中心 y-0.06 ≈ (-2.087, -0.312)  # 产品往桌内，避免半截露沿
-PLACE_Z = TABLE_TOP_Z + 0.10 ≈ 0.717   # 松爪高度，产品再自由落约 6 cm
-# 不要再用 TABLE_TOP + 0.018 去贴桌，会抖
+PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.08
+# 灰筐 container_h20 留在桌上；不要贴桌 IK，会抖
 ```
 
 ### 5.4 物理（摩擦拆开，combine=max）
@@ -192,9 +193,9 @@ Product 质量     0.25 kg
 ### 5.5 时间
 
 ```text
-UNFOLD 3.2 s  ORIENT 2.2  SLIDE 2.4  DESCEND 2.0
-GRASP  3.0 s  LIFT 3.2    CARRY 0.6  HOLD 0.3
-PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETRACT 0.8
+路点：00→05 1.1  05→10 0.85  10→20 1.5  20→25 1.3  25→30 1.1
+DESCEND 1.1  GRASP 1.0  GRASP_WAIT_MAX 0.6  LIFT 2.2
+CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETRACT 0.8
 ```
 
 ---
@@ -224,6 +225,30 @@ PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETRACT 0.8
 - [ ] 路点绕开 CES（`PLACE_VIA_XY ≈ (-2.55, -1.25)`，x > -2.95）
 - [ ] 从 pick 站走到 place 站过程中不摔倒、件不掉
 - [ ] GUI 确认 spawn→抓取站、抓稳→桌边 两段走路
+
+### 6.3 HOLD 快照（给 walk 到 place 的双足控制）
+
+HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 和夹爪闭合，件靠摩擦跟着走。
+
+**站位 / TCP（v2 基线 lift_done 实测，后续 05/10 胸口改过，数量级仍可用）：**
+
+| 量 | 值 |
+|---|---|
+| 骨盆 | `(-3.187, -1.330, 0.755)`，yaw=π |
+| Dex1 TCP 世界 | `(-3.512, -0.981, 0.964)` |
+| Dex1 TCP 骨盆 | `(0.325, -0.349, 0.210)` |
+| 相对夹取 | 世界 Z+8 cm，世界 Y−6 cm（`LIFT_SHIFT_Y`） |
+
+**右臂关键 q**（`RIGHT_ARM_JOINTS`：pitch, roll, yaw, elbow, wr, wp, wy）
+
+| 来源 | q |
+|---|---|
+| 30 交接实测（HOLD 同族，抬起前） | `[-1.421, -1.254, +1.612, +1.031, +0.289, -0.077, +1.466]` |
+| HOLD / `_carry_arm_q` | 抬起结束冻住：一次 IK（Z+0.08、Y−0.06）后的关节回放终点；腕保持抓取朝向 |
+| 当前 authored 05（伸手，不是 HOLD） | `[-0.55, -0.15, +0.22, +0.90, +0.20, +0.10, +0.35]` |
+| 当前 authored 10 | `[-0.70, -0.22, +0.38, +0.75, +0.32, -0.05, +0.55]` |
+
+下次跑通 HOLD 时看日志：`[ces_fsm] HOLD tcp_w=... tcp_b=... q=[...]`，用新数替换上表。
 
 参考（垂臂、不钉盆）任务：`Isaac-Move-Cylinder-G129-Dex1-Wholebody`。
 
@@ -308,15 +333,61 @@ unitree_sim_isaaclab/
 - `40_grasp_posture_ref` 只作动态零空间 `q_ref`，不得作为 `arm_q` 硬下发；三个腕关节与 30 完全相同，肩肘参考变化最大约 `0.57 rad`。
 - 本地已完成 `00→05→10→20→25→30→40` 的 urdf-viz 连续回放；这不是 IsaacLab 碰撞、接触或抓取成功验证。
 
-### 阿里云 IsaacLab 验证 TODO（尚未执行）
+**当前 v2 伸手 05/10（胸口前伸，已在 IsaacLab 跑通抓取）：**
 
-- [ ] 拉取“姿态调优V2”提交，确认 `git status --short` 干净且 v1/v2 目录同时存在。
-- [ ] 用 `--ces_use_joint_waypoints --ces_waypoint_set ces_pick_natural_v2` 启动 CES 抓取；改代码后完整关闭并重启仿真，不依赖热更新。
-- [ ] 确认启动日志解析出的关节路点严格为 `00→05→10→20→25→30`，`30→40` 被识别为 `cartesian_vertical_ik_with_dynamic_q_ref`。
-- [ ] 记录每个路点的实际右臂 q、相邻最大跳变量、关节限位余量，并观察 00→10 是否避开右前方抽屉、肩肘是否外翻、手腕是否发生解翻转。
-- [ ] 到达 30 时记录真实 Dex1 TCP；对照骨盆系目标 `(0.320, -0.380, 0.181)`，Y 优先控制在约 `10 mm` 内，Z 优先控制在约 `5 mm` 内，X 只记录且不单独判失败。
-- [ ] DESCEND 阶段确认 FSM 保持 30 的实时 XY、只将真实 TCP Z 降至约 `0.101 m`，并把夹爪朝向 slerp 到产品夹持方向。
-- [ ] 确认 40 从未作为硬关节位置下发，只通过 `ArmDiffIK.solve(..., q_ref=...)` 的雅可比零空间项影响姿态；检查实际腕关节没有被 q_ref 拉偏。
-- [ ] 记录最终 TCP、产品接触、夹紧、抬升结果，以及 `[ces_fsm] AABB= ... grasp=`；若 Y/Z 超差，再依据真实 IsaacLab 数据微调，不要用 XR 代理 X 误差直接改 q。
-- [ ] 先完成上述基线验证。只有在“锁 X 导致下降姿态明显不自然”时，才考虑为 CES DESCEND 增加局部的分轴位置权重；禁止全局改变其他任务的 IK。
-- [ ] 验证完成后把运行命令、日志数据、成功/失败原因和后续调整写回本文件。
+| wp | q (pitch,roll,yaw,elb,wr,wp,wy) |
+|---|---|
+| 05 | -0.55, -0.15, +0.22, +0.90, +0.20, +0.10, +0.35 |
+| 10 | -0.70, -0.22, +0.38, +0.75, +0.32, -0.05, +0.55 |
+
+20/25/30/40 authored q 未改。右移仍在 10→20。
+
+### 阿里云 IsaacLab 验证（2026-08-15，Pick 已完成）
+
+命令（无 `--manual_sim_control`，`--ces_stop_after lift`）：
+
+```bash
+python sim_main.py --device cuda:0 --enable_cameras \
+  --task Isaac-Move-CES-Product-G129-Dex1-Wholebody \
+  --robot_type g129 --enable_dex1_dds --auto_ces_pick_place \
+  --station_mode snap --ces_use_joint_waypoints \
+  --ces_waypoint_set ces_pick_natural_v2 --ces_stop_after lift \
+  --viewport_camera none
+```
+
+- [x] 路点 `00→05→10→20→25→30`，`30→40` 只作 `q_ref`
+- [x] 05/10 胸口前伸，避开抽屉；抓取稳定
+- [x] 抬起一次 IK + 关节回放，夹持不抖
+- [x] 40 未作为 `arm_q` 硬下发
+
+**路点实际 q（与 authored 一致，限位余量 rad / 相对上一点 dmax）：**
+
+| wp | q (pitch,roll,yaw,elb,wr,wp,wy) | margin | dmax |
+|---|---|---|---|
+| 00 | +0.350,-0.180,+0.000,+0.870,0,0,0 | 1.224 | — |
+| 05 | -1.249,-1.458,+1.246,+0.120,+0.408,-0.452,+0.985 | 0.630 | 1.599 |
+| 10 | -1.370,-1.407,+1.360,+0.107,+0.346,-0.142,+0.865 | 0.750 | 0.310 |
+| 20 | -1.283,-1.459,+1.392,+0.551,+0.725,-0.123,+0.820 | 0.792 | 0.444 |
+| 25 | -1.446,-1.620,+1.507,+0.541,+0.286,-0.125,+1.240 | 0.375 | 0.439 |
+| 30 | -1.421,-1.254,+1.612,+1.031,+0.289,-0.077,+1.466 | 0.149 | 0.490 |
+| 40 q_ref | -1.149,-0.908,+1.434,+1.601,+0.289,-0.077,+1.466 | — | 0.570（仅肩肘） |
+
+00→10 无碰撞报错/FAILED；30 腕限位最紧 0.149 rad。日志未见腕解翻转。
+
+**TCP（骨盆系）**
+
+| 时刻 | tcp_b | vs 目标 | err mm (X,Y,Z) |
+|---|---|---|---|
+| 30 交接 | (0.294,-0.384,0.167) | (0.320,-0.380,0.181) | **-25.8, -3.9, -13.6** |
+| 下降结束 | (0.322,-0.366,0.130) | (0.320,-0.380,0.101) | +2.1, **+14.0, +28.9** |
+| 抬起后 | (0.325,-0.349,0.210) | — | 世界 Z 0.885→0.964（约 +8 cm） |
+
+判据：30 的 Y 合格（3.9 mm），Z 超差（13.6>5）。下降目标 Z=0.101 未到（停在 0.130，世界 0.885，规划 0.846，`tcp_err=51 mm`）。hold_xy 漂 33.2 mm（slerp 朝向时 IK 带偏了 XY）。
+
+**场景行：** `AABB=(-3.4870,-0.9609,0.8110) grasp=(-3.5070,-0.9609,0.8458)`  
+AABB Y 比 `PRODUCT_POS` 偏 −11 mm。夹爪闭合、站稳、抬臂完成；lift 中 `tcp_err` 25→81 mm（目标点上移，件是否跟着需看 GUI）。未根据 XR 代理 X 改 q。
+
+**后续（不要用 XR X 误差改 q）：**
+1. 30 的 Z 再抬约 14 mm（骨盆 0.167→0.181），X 可记但先不动。
+2. DESCEND 更贴规划 Z（0.846 世界 / 0.101 骨盆），并抑制 slerp 时的 XY 漂移。
+3. GUI 确认件是否随抬升；再决定是否只给 CES DESCEND 加局部分轴权重。

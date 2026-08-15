@@ -1,10 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""Load authored CES right-arm waypoint JSON by joint name.
-
-Viewer-only fields (``viewer_urdf``, ``ik_end``) are ignored.  ``q`` is
-reordered onto :data:`RIGHT_ARM_JOINTS` so DDS motor indices are never used.
-"""
+"""按关节名加载 CES 右手路点 JSON。忽略 viewer 字段，不使用 DDS 下标。"""
 from __future__ import annotations
 
 import json
@@ -43,7 +39,7 @@ def _remap_q(joint_order: list[str], q: list[float], target_names: list[str]) ->
 
 
 def _load_pose_q(path: Path, target_names: list[str]) -> tuple[str, tuple[float, ...]]:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     name = str(data["name"])
     q = _remap_q(list(data["joint_order"]), list(data["q"]), target_names)
     return name, q
@@ -57,7 +53,7 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
     if not manifest_path.is_file():
         raise FileNotFoundError(f"CES waypoint manifest not found: {manifest_path}")
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     target_names = list(C.RIGHT_ARM_JOINTS)
     q_by_name: dict[str, tuple[float, ...]] = {}
     for pose_file in manifest.get("pose_files", []):

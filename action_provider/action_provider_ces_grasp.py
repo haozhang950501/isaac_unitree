@@ -1,11 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""Autonomous CES product pick-and-place action provider.
-
-Pelvis is pinned at the pick / place stand (定位).  The Dex1 squeeze is a
-real PD grasp: pad friction lifts the Product.  The right arm is
-joint-locked so the default hang pose cannot pull it down.
-"""
+"""CES 取放动作：钉盆定位，Dex1 PD 夹持靠垫面摩擦起件，伸手时锁右臂。"""
 from __future__ import annotations
 
 import math
@@ -125,10 +120,9 @@ class CESGraspActionProvider(DDSRLActionProvider):
         return robot.data.joint_pos[:, self._right_arm_idx].clone()
 
     def _slew_arm(self, q_tgt: torch.Tensor) -> torch.Tensor:
-        # Slow slew only while friction-lifting / carrying.  Place-approach
-        # still squeezes but must be able to reach the drop pose in time.
+        # 夹持冻臂时慢跟；抬起走规划关节轨迹，不能限太死。
         phase = self.fsm.phase.value
-        slow = self._squeeze and phase in ("lift", "carry", "hold", "goto_place")
+        slow = self._squeeze and phase in ("carry", "hold", "goto_place")
         lim = C.ARM_SLEW_RAD_LIFT if slow else C.ARM_SLEW_RAD
         dq = q_tgt - self._q_right
         dq = torch.clamp(dq, -lim, lim)
@@ -200,9 +194,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
         vel = torch.zeros(1, 6, device=self.env.device, dtype=pose.dtype)
         robot.write_root_pose_to_sim(pose)
         robot.write_root_velocity_to_sim(vel)
-        # Station teleport only: if the pelvis actually jumped, bring a
-        # squeezed part along in world XY.  Same-stand pinning (dx≈0) leaves
-        # the object in PhysX so lift is friction, not a TCP weld.
+        # 换站瞬移才带件；同站钉盆不焊 TCP，抬起靠摩擦。
         jumped = (dx * dx + dy * dy) > 4e-4 or abs(dyaw) > 0.02
         if self._squeeze and jumped:
             self._translate_object_with_snap(old_x, old_y, dx, dy, dyaw)
@@ -254,6 +246,8 @@ class CESGraspActionProvider(DDSRLActionProvider):
             full_action[self.waist_to_all_indices] = self.default_waist_positions[0]
             full_action[self._left_arm_idx] = self._left_arm_default[0]
             if cmd.arm_q is not None:
+                if self.fsm.use_joint_waypoints and self.fsm.phase.value == "descend":
+                    print("[ces_verify] ERROR arm_q hard-set during DESCEND (40 must be q_ref only)")
                 full_action[self._right_arm_idx] = self._slew_arm(
                     cmd.arm_q.to(full_action.dtype)
                 )
@@ -288,8 +282,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
             lock_upper = (
                 cmd.arm_q is not None or cmd.tcp_pos is not None or self._squeeze
             )
-            # While squeezing, drive the arm with PD only.  write_joint_state
-            # teleports the pads off the part and kills friction.
+            # 夹持中手臂只走 PD，write_joint_state 会把垫面瞬移开。
             kinematic_arm = lock_upper and not self._squeeze
             robot = self.env.scene["robot"]
             for _ in range(4):
