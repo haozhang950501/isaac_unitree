@@ -17,7 +17,7 @@
 
 **本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹 Product → 胸口高度抬起 → **snap 定位换站** → 放到 packing table。夹取靠垫面摩擦，不焊 TCP。走路换站仍未接通。
 
-**2026-08-15**：旧 FSM 保留。`--ces_use_joint_waypoints` 走 `ces_pick_natural_v1`：00→30 关节插补，到达 30 后真实 TCP/IK 垂直下落，30→40 只作零空间 `q_ref`。已能抓取；最终 TCP/姿态仍待 URDF-viz 重设计。
+**2026-08-15**：旧 FSM 和 `ces_pick_natural_v1` 保留。默认自然轨迹已切换为 `ces_pick_natural_v2`：00→05→10→20→25→30 关节插补，到达 30 后真实 TCP/IK 垂直下落，30→40 只作零空间 `q_ref`。v2 已完成本地 URDF-viz 姿态设计与连续回放，尚未在阿里云 IsaacLab 验证。
 
 ---
 
@@ -42,10 +42,11 @@ python sim_main.py \
   --auto_ces_pick_place \
   --station_mode snap \
   --manual_sim_control \
-  --ces_use_joint_waypoints
+  --ces_use_joint_waypoints \
+  --ces_waypoint_set ces_pick_natural_v2
 ```
 
-自然路点默认 `ces_pick_natural_v1`。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
+自然路点默认 `ces_pick_natural_v2`；可用 `--ces_waypoint_set ces_pick_natural_v1` 回退。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
 
 改代码后必须关仿真重开（不会热更新）。端口占用：`fuser -k 60000/tcp`。WebRTC / `image_server` 报错可忽略。
 
@@ -260,7 +261,7 @@ unitree_sim_isaaclab/
 ├── action_provider/
 │   ├── create_action_provider.py
 │   ├── manip_common/
-│   ├── ces_grasp/                  # FSM + poses/ces_pick_natural_v1
+│   ├── ces_grasp/                  # FSM + poses/ces_pick_natural_v1、v2
 │   └── action_provider_ces_grasp.py
 ├── tools/
 │   ├── verify_ces_scene.py
@@ -298,10 +299,24 @@ unitree_sim_isaaclab/
 
 运行时 30 后**锁 XY、只落 Z**，朝向 2 s slerp 到产品夹持姿态；40 只作 `q_ref`。
 
-### Codex TODO（本地重设计 `ces_pick_natural_v1`）
+### 姿态调优 V2（本地已完成）
 
-- [ ] 在 URDF-viz 把 30 的 Dex1 TCP 对准 `(0.320, -0.380, 0.181)`，40 对准 `(0.320, -0.380, 0.101)`（掌心 Z 各 +0.115）
-- [ ] 30/40 朝向：手指朝下、夹爪平行产品 36 mm 世界 X 面；XY 两姿态保持一致，40 只降 Z
-- [ ] 重做 00→10→20→25→30 自然关节 q，按名写入 JSON；忽略 Windows `viewer_urdf`
-- [ ] 40 只当肩肘参考，不要靠 40 去纠另一个 TCP
-- [ ] 进仿真看 `[ces_fsm] AABB= ... grasp=`，用真实 AABB 微调几毫米
+- 姿态目录：`action_provider/ces_grasp/poses/ces_pick_natural_v2/`。
+- 关节路点：`00→05→10→20→25→30`，按 `trajectory_manifest.json` 的时长做 smoothstep 插补。
+- `05_forward_reach` 在进入 10 前已基本达到工作高度，05→10 的 XR 掌心 Z 波动约 `0.8 mm`，用于降低右前方抽屉碰撞风险。
+- `30_pre_grasp_vertical` 是关节路点与真实 TCP/IK 的交接姿态；最终位置精度由 IsaacLab 中的 `right_hand_base_link + TCP_LOCAL` 决定，不使用 XR 掌心 FK 代替。
+- `40_grasp_posture_ref` 只作动态零空间 `q_ref`，不得作为 `arm_q` 硬下发；三个腕关节与 30 完全相同，肩肘参考变化最大约 `0.57 rad`。
+- 本地已完成 `00→05→10→20→25→30→40` 的 urdf-viz 连续回放；这不是 IsaacLab 碰撞、接触或抓取成功验证。
+
+### 阿里云 IsaacLab 验证 TODO（尚未执行）
+
+- [ ] 拉取“姿态调优V2”提交，确认 `git status --short` 干净且 v1/v2 目录同时存在。
+- [ ] 用 `--ces_use_joint_waypoints --ces_waypoint_set ces_pick_natural_v2` 启动 CES 抓取；改代码后完整关闭并重启仿真，不依赖热更新。
+- [ ] 确认启动日志解析出的关节路点严格为 `00→05→10→20→25→30`，`30→40` 被识别为 `cartesian_vertical_ik_with_dynamic_q_ref`。
+- [ ] 记录每个路点的实际右臂 q、相邻最大跳变量、关节限位余量，并观察 00→10 是否避开右前方抽屉、肩肘是否外翻、手腕是否发生解翻转。
+- [ ] 到达 30 时记录真实 Dex1 TCP；对照骨盆系目标 `(0.320, -0.380, 0.181)`，Y 优先控制在约 `10 mm` 内，Z 优先控制在约 `5 mm` 内，X 只记录且不单独判失败。
+- [ ] DESCEND 阶段确认 FSM 保持 30 的实时 XY、只将真实 TCP Z 降至约 `0.101 m`，并把夹爪朝向 slerp 到产品夹持方向。
+- [ ] 确认 40 从未作为硬关节位置下发，只通过 `ArmDiffIK.solve(..., q_ref=...)` 的雅可比零空间项影响姿态；检查实际腕关节没有被 q_ref 拉偏。
+- [ ] 记录最终 TCP、产品接触、夹紧、抬升结果，以及 `[ces_fsm] AABB= ... grasp=`；若 Y/Z 超差，再依据真实 IsaacLab 数据微调，不要用 XR 代理 X 误差直接改 q。
+- [ ] 先完成上述基线验证。只有在“锁 X 导致下降姿态明显不自然”时，才考虑为 CES DESCEND 增加局部的分轴位置权重；禁止全局改变其他任务的 IK。
+- [ ] 验证完成后把运行命令、日志数据、成功/失败原因和后续调整写回本文件。

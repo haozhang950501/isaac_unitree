@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "name": "ces_pick_natural_v2",
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "pose_files": [
+    "00_ready.json",
+    "05_forward_reach.json",
+    "10_forward_lift_retract.json",
+    "20_right_shift_wrist_down.json",
+    "25_pre_grasp_xy_aligned.json",
+    "30_pre_grasp_vertical.json",
+    "40_grasp_posture_ref.json"
+  ],
+  "preview_pose_files": [
+    "00_ready.json",
+    "05_forward_reach.json",
+    "10_forward_lift_retract.json",
+    "20_right_shift_wrist_down.json",
+    "25_pre_grasp_xy_aligned.json",
+    "30_pre_grasp_vertical.json"
+  ],
+  "preview_through": "30_pre_grasp_vertical",
+  "segments": [
+    {
+      "from": "00_ready",
+      "to": "05_forward_reach",
+      "duration_s": 1.4,
+      "preview_control": "joint_smoothstep",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "05_forward_reach",
+      "to": "10_forward_lift_retract",
+      "duration_s": 1.4,
+      "preview_control": "joint_smoothstep",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "10_forward_lift_retract",
+      "to": "20_right_shift_wrist_down",
+      "duration_s": 2.0,
+      "preview_control": "joint_smoothstep",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "20_right_shift_wrist_down",
+      "to": "25_pre_grasp_xy_aligned",
+      "duration_s": 2.2,
+      "preview_control": "joint_smoothstep",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "25_pre_grasp_xy_aligned",
+      "to": "30_pre_grasp_vertical",
+      "duration_s": 1.8,
+      "preview_control": "joint_smoothstep",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "30_pre_grasp_vertical",
+      "to": "40_grasp_posture_ref",
+      "duration_s": 1.8,
+      "preview_control": "q_ref_only_not_commanded",
+      "future_project_control": "cartesian_vertical_ik_with_dynamic_q_ref"
+    }
+  ],
+  "preview_rate_hz": 25.0,
+  "viewer": {
+    "urdf": "C:\\Users\\Zedward\\Desktop\\Isaac\\urdf_pose_toolkit\\xr_teleoperate\\assets\\g1\\g1_body29_hand14.urdf",
+    "ik_end": "right_hand_palm_joint",
+    "tcp_local_applied": false,
+    "dex1_tcp_is_calibrated_proxy_only": true
+  },
+  "future_project_handoff": {
+    "joint_space_through": "30_pre_grasp_vertical",
+    "cartesian_descent_target": "project Dex1 TCP grasp target",
+    "dynamic_q_ref_from": "30_pre_grasp_vertical",
+    "dynamic_q_ref_to": "40_grasp_posture_ref",
+    "q_ref_active_joint_subset": [
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint"
+    ],
+    "q_ref_wrist_policy": "copy_from_30_exactly"
+  },
+  "calibration": {
+    "isaac_tcp_target_in_pelvis_m": [
+      0.32,
+      -0.38,
+      0.181
+    ],
+    "isaac_conceptual_palm_in_pelvis_m": [
+      0.32,
+      -0.38,
+      0.296
+    ],
+    "xr_proxy_calibration_bias_m": [
+      0.002551708,
+      -0.002012798,
+      0.011252258
+    ],
+    "xr_proxy_target_in_pelvis_m": [
+      0.317448292,
+      -0.377987202,
+      0.169747742
+    ]
+  },
+  "validation": {
+    "forward_lift_height_gain_m": 0.386698947,
+    "forward_lift_x_change_m": 0.281896623,
+    "right_shift_y_change_m": -0.106693631,
+    "xy_aligned_proxy_x_error_m": 0.022870894,
+    "xy_aligned_proxy_y_error_m": 0.00022976,
+    "xy_aligned_proxy_z_error_m": -0.002625267,
+    "xy_aligned_finger_down_angle_deg": 20.420336,
+    "xy_aligned_jaw_axis_angle_deg": 78.981235,
+    "pre_grasp_proxy_x_error_m": 0.023134434,
+    "pre_grasp_proxy_y_error_m": 0.005989725,
+    "pre_grasp_proxy_z_error_m": 0.002299859,
+    "pre_grasp_finger_down_angle_deg": 5.129111,
+    "pre_grasp_jaw_axis_angle_deg": 67.886111,
+    "ready_to_lift_max_abs_joint_delta_rad": 1.59916,
+    "later_segments_max_abs_joint_delta_rad": 0.490472,
+    "q_ref_wrist_max_abs_delta_rad": 0.0,
+    "min_joint_limit_margin_rad": 0.148629358,
+    "validation_passed": true,
+    "violations": []
+  },
+  "generated_at": "2026-08-15T20:10:09+08:00"
+}
