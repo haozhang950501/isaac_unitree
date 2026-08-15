@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "name": "30_pre_grasp_vertical",
+  "unit": "rad",
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "q": [
+    -1.4213965,
+    -1.2544835,
+    1.6117437,
+    1.031472,
+    0.28874475,
+    -0.07691543,
+    1.4658002
+  ],
+  "purpose": "Vertical gripper posture above the product before Cartesian descent.",
+  "viewer_urdf": "C:\\Users\\Zedward\\Desktop\\Isaac\\urdf_pose_toolkit\\xr_teleoperate\\assets\\g1\\g1_body29_hand14.urdf",
+  "ik_end": "right_hand_palm_joint",
+  "palm_position_in_pelvis_m": [
+    0.289745496,
+    -0.374766614,
+    0.281987396
+  ],
+  "palm_orientation": {
+    "quaternion_wxyz": [
+      0.581588462,
+      -0.426165817,
+      0.589955229,
+      0.363442409
+    ],
+    "rotation_matrix": [
+      [
+        0.039724886,
+        -0.925585328,
+        0.376448847
+      ],
+      [
+        -0.080089681,
+        0.372584624,
+        0.924535744
+      ],
+      [
+        -0.995995771,
+        -0.066876745,
+        -0.059328951
+      ]
+    ],
+    "hand_y_down_alignment": 0.066876745
+  },
+  "dex1_two_finger_proxy": {
+    "frame_mapping": {
+      "xr_palm_+X": "dex1_hand_+Y_finger_direction",
+      "xr_palm_+Z": "dex1_hand_+X_jaw_axis"
+    },
+    "tcp_offset_along_xr_finger_m": 0.115,
+    "tcp_proxy_position_in_pelvis_m": [
+      0.294313858,
+      -0.383976927,
+      0.167447883
+    ],
+    "xr_finger_down_alignment": 0.995995771,
+    "xr_finger_down_angle_deg": 5.129111,
+    "xr_jaw_axis_parallel_pelvis_x_alignment": 0.376448847,
+    "xr_jaw_axis_to_pelvis_x_angle_deg": 67.886111,
+    "xr_spread_to_body_minus_x_alignment": -0.376448847,
+    "isaac_tcp_target_in_pelvis_m": [
+      0.32,
+      -0.38,
+      0.181
+    ],
+    "isaac_conceptual_palm_in_pelvis_m": [
+      0.32,
+      -0.38,
+      0.296
+    ],
+    "xr_proxy_calibration_bias_m": [
+      0.002551708,
+      -0.002012798,
+      0.011252258
+    ],
+    "xr_proxy_target_in_pelvis_m": [
+      0.317448292,
+      -0.377987202,
+      0.169747742
+    ],
+    "xr_proxy_error_m": [
+      -0.023134434,
+      -0.005989725,
+      -0.002299859
+    ],
+    "xr_proxy_error_norm_m": 0.02400767
+  },
+  "source": "manual_urdf_viz",
+  "captured_at": "2026-08-15T19:28:53+08:00",
+  "validation": {
+    "joint_limit_margin_rad": [
+      1.6678035,
+      0.9970165,
+      1.0062563,
+      1.062928,
+      1.683477304,
+      1.537514128,
+      0.148629358
+    ],
+    "min_joint_limit_margin_rad": 0.148629358,
+    "joint_limit_violations": [],
+    "previous_pose": "25_pre_grasp_xy_aligned",
+    "delta_from_previous_rad": [
+      0.3331035,
+      -0.4804835,
+      1.1387437,
+      -0.812928,
+      0.76714475,
+      -1.13071543,
+      0.5158002
+    ],
+    "max_abs_delta_from_previous_rad": 1.1387437
+  }
+}

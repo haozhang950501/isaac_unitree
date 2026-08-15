@@ -109,7 +109,7 @@ STOP_AFTER = "place"
 
 # Optional authored joint path (see --ces_use_joint_waypoints).  Old FSM still
 # uses RIGHT_ARM_READY.  JSON q is matched by joint name, never DDS index.
-WAYPOINT_SET_DEFAULT = "ces_pick_natural_v1"
+WAYPOINT_SET_DEFAULT = "ces_pick_natural_v2"
 WAYPOINT_LEAD_IN_TIME = 0.4
 WAYPOINT_LEAD_IN_TOL = 0.05  # skip lead-in when ||q_now - q00|| is below this
 

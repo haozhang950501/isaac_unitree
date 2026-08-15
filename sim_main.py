@@ -116,7 +116,7 @@ parser.add_argument(
 parser.add_argument(
     "--ces_waypoint_set",
     type=str,
-    default="ces_pick_natural_v1",
+    default="ces_pick_natural_v2",
     help="CES joint waypoint set under action_provider/ces_grasp/poses/",
 )
 # add AppLauncher parameters

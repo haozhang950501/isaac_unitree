@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "name": "10_forward_lift_retract",
+  "unit": "rad",
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "q": [
+    -1.3704,
+    -1.407435,
+    1.360213,
+    0.107249,
+    0.345636,
+    -0.141768,
+    0.864803
+  ],
+  "purpose": "Raise the arm forward while retracting the elbow; avoid a right-rear lift.",
+  "viewer_urdf": "C:\\Users\\Zedward\\Desktop\\Isaac\\urdf_pose_toolkit\\xr_teleoperate\\assets\\g1\\g1_body29_hand14.urdf",
+  "ik_end": "right_hand_palm_joint",
+  "palm_position_in_pelvis_m": [
+    0.297313827,
+    -0.225553311,
+    0.292273242
+  ],
+  "palm_orientation": {
+    "quaternion_wxyz": [
+      0.595823581,
+      -0.625145283,
+      0.146226332,
+      0.482499217
+    ],
+    "rotation_matrix": [
+      [
+        0.49162473,
+        -0.757794227,
+        -0.429014026
+      ],
+      [
+        0.39214342,
+        -0.247224239,
+        0.886060785
+      ],
+      [
+        -0.777514414,
+        -0.603844421,
+        0.17562247
+      ]
+    ],
+    "hand_y_down_alignment": 0.603844421
+  },
+  "dex1_two_finger_proxy": {
+    "frame_mapping": {
+      "xr_palm_+X": "dex1_hand_+Y_finger_direction",
+      "xr_palm_+Z": "dex1_hand_+X_jaw_axis"
+    },
+    "tcp_offset_along_xr_finger_m": 0.115,
+    "tcp_proxy_position_in_pelvis_m": [
+      0.353850671,
+      -0.180456818,
+      0.202859084
+    ],
+    "xr_finger_down_alignment": 0.777514414,
+    "xr_finger_down_angle_deg": 38.966443,
+    "xr_jaw_axis_parallel_pelvis_x_alignment": 0.429014026,
+    "xr_jaw_axis_to_pelvis_x_angle_deg": 64.594996,
+    "xr_spread_to_body_minus_x_alignment": 0.429014026
+  },
+  "source": "manual_urdf_viz",
+  "captured_at": "2026-08-15T19:46:02+08:00",
+  "validation": {
+    "joint_limit_margin_rad": [
+      1.7188,
+      0.844065,
+      1.257787,
+      1.154449,
+      1.626586054,
+      1.472661558,
+      0.749626558
+    ],
+    "min_joint_limit_margin_rad": 0.749626558,
+    "joint_limit_violations": [],
+    "previous_pose": "00_ready",
+    "delta_from_previous_rad": [
+      -1.7204,
+      -1.227435,
+      1.360213,
+      -0.762751,
+      0.345636,
+      -0.141768,
+      0.864803
+    ],
+    "max_abs_delta_from_previous_rad": 1.7204
+  }
+}
