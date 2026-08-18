@@ -5,10 +5,15 @@ from __future__ import annotations
 
 import math
 
+from action_provider.ces_grasp.navigation import WalkGait, build_carry_route
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
+    PICK_STAND_X_B,
+    PICK_STAND_XY as SCENE_PICK_STAND_XY,
+    PICK_STAND_Y_B,
     PLACE_TRAY_HEIGHT,
     PRODUCT_POS,
     ROBOT_INIT_POS,
+    ROBOT_STAND_YAW,
     TABLE_SPAWN_POS,
     TABLE_TOP_Z,
 )
@@ -43,8 +48,9 @@ RIGHT_GRIPPER_JOINTS = ["right_hand_Joint1_1", "right_hand_Joint2_1"]
 LEFT_GRIPPER_JOINTS = ["left_hand_Joint1_1", "left_hand_Joint2_1"]
 
 # 站位：target - (x_b*前 + y_b*左)。抓取站靠近托盘，右手能伸进上料口。
-X_B_PICK = 0.30
-Y_B_PICK = -0.38
+# 抓取站位与 spawn 同源（机器人直接生成在抓取站，不再瞬移）。
+X_B_PICK = PICK_STAND_X_B
+Y_B_PICK = PICK_STAND_Y_B
 X_B_PLACE = 0.46
 Y_B_PLACE = -0.18
 
@@ -76,14 +82,27 @@ GRASP_TIME = 1.0
 GRASP_POS_TOL = 0.055
 GRASP_WAIT_MAX = 0.6
 LIFT_TIME = 2.2
-CARRY_TIME = 0.6  # 冻抬起 q，不要再笛卡尔收臂（件会掉）
+# 抬起后按抓取路点的逆序回到初始臂姿（00），夹着件走路更稳、也不挡视线。
+RETURN_LEAD_IN_TIME = 0.8  # 抬起 q → 30 的过渡段
+RETURN_TIME = 2.5  # 无关节路点时：单段回默认臂姿
+CARRY_TIME = 0.6  # 冻臂 q，不要再笛卡尔收臂（件会掉）
 HOLD_TIME = 0.3
-PLACE_APPROACH_TIME = 2.8
-# snap 后若 TCP 已靠近放置点，只落 Z，避免长距离追 XY 拧臂。
-PLACE_HOLD_XY_M = 0.40
+# 放置：从初始臂姿先抬到放置高度（贴身、只往前挪一点），再水平伸到灰筐上方。
+PLACE_RAISE_FORWARD = 0.10  # 抬臂段顺机体前方挪一点，避免死折肘
+PLACE_RAISE_TIME = 2.0
+PLACE_REACH_TIME = 2.2
+PLACE_APPROACH_TIME = PLACE_RAISE_TIME + PLACE_REACH_TIME
+# 放置 IK 只跟位置（不给朝向目标），靠下面的窗口把姿态锁在初始臂姿附近：
+# 肩内外旋/肩偏摆贴住初始值 → 肘不外翻；腕三轴几乎不转。
+PLACE_ROLL_WINDOW = 0.45
+PLACE_YAW_WINDOW = 0.50
+PLACE_WRIST_WINDOW = 0.30
+PLACE_ELBOW_MIN = 0.20  # 肘不许伸直锁死
 PLACE_DESCEND_TIME = 0.0  # 跳过：悬停松爪，件自由落下
 RELEASE_TIME = 0.8
-RETRACT_TIME = 0.8
+# 收臂：按放置轨迹的逆序（灰筐上方 → 抬臂点 → 初始臂姿），别横扫桌沿。
+RETRACT_TIME = 1.6
+RETRACT_HOME_TIME = 1.6
 
 # 旧 FSM 垂臂种子，顺序同 RIGHT_ARM_JOINTS。
 RIGHT_ARM_READY = (0.40, -0.42, 0.18, 1.20, 0.0, 0.95, 0.0)
@@ -96,22 +115,29 @@ WAYPOINT_SET_DEFAULT = "ces_pick_natural_v2"
 WAYPOINT_LEAD_IN_TIME = 0.25
 WAYPOINT_LEAD_IN_TOL = 0.05
 
-# HOLD 后的双足换站。策略命令是机体系 [vx, vy, wz, height]：
-# 先转向世界系路点，再只用正 vx 前进，禁止用负 vx 硬倒车。
-WALK_PLACE_TIMEOUT = 50.0
-WALK_GOTO_TIMEOUT = 20.0
-WALK_POS_ARRIVE = 0.06
-WALK_YAW_ARRIVE = 0.12
-WALK_ALIGN_YAW = 0.22
-WALK_MIN_VX = 0.10
-WALK_MAX_VX = 0.22
-WALK_DISTANCE_GAIN = 0.65
-WALK_YAW_GAIN = 1.20
-WALK_MAX_WZ = 0.55
-WALK_VX_ACCEL = 0.45
-WALK_VY_ACCEL = 0.45
-WALK_WZ_ACCEL = 1.20
+# HOLD 后的双足换站。策略命令是机体系 [vx, vy, wz, height]。
+# 关键约束：策略对小指令不迈步（键盘点动走不动，必须长按把指令拉起来），
+# 所以平移/转向都用固定幅值 + 死区，不用比例控制。幅值参考键盘长按能走的量级。
+WALK_VX = 0.45  # 前进/后退幅值；< 0.3 基本只前后晃不迈步
+WALK_VY = 0.30  # 侧移纠偏幅值
+WALK_WZ = 0.70  # 原地转向幅值（键盘 Z/X 长按约 0.7~1.0）
+# 指令归零后策略还会多走一点：提前 stop_margin 松"油门"。
+# 若实测停不到位（走过头撞桌 / 差太多够不到灰筐），只调这两个值。
+WALK_STOP_MARGIN = 0.15
+WALK_STOP_MARGIN_PLACE = 0.12  # 最后一段停短了手臂就要多伸，别留太大余量
+# 后退段步子容易迈大：目标点再收 20 cm，宁可退不够（第③段侧移能补）。
+WALK_BACKOFF_TRIM = 0.20
+WALK_YAW_ARRIVE = 0.15  # 转向到位死区 ≈ 8.6°
+WALK_LATERAL_TOL = 0.10  # 侧向偏差超过才侧移纠偏
+WALK_ALIGN_YAW = 0.30  # 平移中朝向纠偏死区
+WALK_REALIGN_YAW = 0.60  # 歪太多：停下平移，先转正
+WALK_LEG_SETTLE = 0.5  # 每段之间零指令停稳，避免后退接右转时混合指令
 WALK_ARRIVE_HOLD = 0.35
+WALK_PLACE_TIMEOUT = 60.0
+WALK_GOTO_TIMEOUT = 20.0
+WALK_VX_ACCEL = 1.00
+WALK_VY_ACCEL = 1.00
+WALK_WZ_ACCEL = 2.00
 WALK_ABORT_TILT = 0.55
 WALK_ABORT_HOLD = 0.40
 
@@ -154,22 +180,44 @@ def stand_xy(target_xy: tuple[float, float], yaw: float, x_b: float, y_b: float)
 
 
 # 抓取站在托盘左侧，右手伸进上料口。yaw=π 朝 -X（整簇已转 +180°）。
-SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
-SPAWN_STAND_YAW = math.pi
-
-PICK_STAND_YAW = math.pi
+# 机器人 spawn 就在抓取站，所以 SPAWN_* 与 PICK_* 相同，启动不瞬移。
+PICK_STAND_YAW = math.radians(ROBOT_STAND_YAW)
 PICK_TARGET_XY = (PRODUCT_POS[0], PRODUCT_POS[1])
-PICK_STAND_XY = stand_xy(PICK_TARGET_XY, PICK_STAND_YAW, X_B_PICK, Y_B_PICK)
+PICK_STAND_XY = SCENE_PICK_STAND_XY
+SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
+SPAWN_STAND_YAW = PICK_STAND_YAW
 
-# 放置站面向桌子（yaw=π/2）。目标往桌内收 6 cm，避免件露沿。
+# 放置站面向桌子（yaw=π/2）。PLACE_TARGET_XY 就是灰色托盘中心
+# （见 base_scene 的 place_gray_tray_on_table：桌心 y-0.06）。
 PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
 PLACE_STAND_XY = stand_xy(PLACE_TARGET_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
 
-# walk 绕开 CES（x > -2.95），过道里再转向桌子。
-PICK_VIA_XY = (ROBOT_INIT_POS[0] - 0.15, -1.70)
-PLACE_VIA_XY = (-2.55, -1.25)
+# HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
+# ① 后退到与灰色托盘 / 放置站对齐（backoff 角点）
+# ② 原地右转 yaw π → π/2，正对桌子
+# ③ 正向走进放置站
+CARRY_WALK_GAIT = WalkGait(
+    vx=WALK_VX,
+    vy=WALK_VY,
+    wz=WALK_WZ,
+    stop_margin=WALK_STOP_MARGIN,
+    yaw_tol=WALK_YAW_ARRIVE,
+    lateral_tol=WALK_LATERAL_TOL,
+    align_yaw=WALK_ALIGN_YAW,
+    realign_yaw=WALK_REALIGN_YAW,
+    leg_settle=WALK_LEG_SETTLE,
+)
+CARRY_WALK_LEGS = build_carry_route(
+    pick_xy=PICK_STAND_XY,
+    pick_yaw=PICK_STAND_YAW,
+    place_xy=PLACE_STAND_XY,
+    place_yaw=PLACE_STAND_YAW,
+    place_stop_margin=WALK_STOP_MARGIN_PLACE,
+    backoff_trim=WALK_BACKOFF_TRIM,
+)
+WALK_BACKOFF_XY = CARRY_WALK_LEGS[0].target_xy
 
 TABLE_REWARD_HALF_XY = (1.15, 0.40)
 DROP_HEIGHT = 0.32

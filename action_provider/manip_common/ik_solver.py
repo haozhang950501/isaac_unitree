@@ -156,6 +156,8 @@ class ArmDiffIK:
         target_quat_w: torch.Tensor | None = None,
         q_ref: torch.Tensor | None = None,
         q_ref_gain: float = 0.25,
+        q_lo: torch.Tensor | None = None,
+        q_hi: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute absolute joint-position targets that drive the TCP to the goal.
 
@@ -169,6 +171,10 @@ class ArmDiffIK:
                 TCP task update.
             q_ref_gain: null-space step gain ``k`` in
                 ``dq = J^+ e + (I - J^+ J) k (q_ref - q)``.
+            q_lo: optional per-joint lower bound, tightened against the hardware
+                limit.  Use it to keep a posture (elbow / wrist) out of a range
+                the task must not enter.
+            q_hi: optional per-joint upper bound, same convention as ``q_lo``.
 
         Returns:
             Desired joint positions for this arm, shape [N, num_joints].
@@ -200,6 +206,11 @@ class ArmDiffIK:
             jac = jac_b[:, 0:3, :] * self.w_pos
 
         q = robot.data.joint_pos[:, self.joint_ids].clone()
+        lo, hi = self.q_min, self.q_max
+        if q_lo is not None:
+            lo = torch.maximum(lo, q_lo.to(device=lo.device, dtype=lo.dtype))
+        if q_hi is not None:
+            hi = torch.minimum(hi, q_hi.to(device=hi.device, dtype=hi.dtype))
         q_ref_b = None
         if q_ref is not None:
             q_ref_b = q_ref.to(device=q.device, dtype=q.dtype)
@@ -225,7 +236,7 @@ class ArmDiffIK:
                 null_proj = eye_j.unsqueeze(0) - torch.bmm(j_plus, jac)
                 dq = dq + (null_proj @ (k_ref * (q_ref_b - q)).unsqueeze(-1)).squeeze(-1)
             dq = torch.clamp(self.gain * dq, -self.max_delta, self.max_delta)
-            q = torch.clamp(q + dq, self.q_min, self.q_max)
+            q = torch.clamp(q + dq, lo, hi)
             # first-order residual (no extra physics FK between inner iters)
             error = error - (jac @ dq.unsqueeze(-1)).squeeze(-1)
             if at_goal:

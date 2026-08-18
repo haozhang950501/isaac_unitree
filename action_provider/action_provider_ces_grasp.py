@@ -136,6 +136,10 @@ class CESGraspActionProvider(DDSRLActionProvider):
         robot = self.env.scene["robot"]
         return robot.data.joint_pos[:, self._right_arm_idx].clone()
 
+    def get_right_arm_home_q(self):
+        """USD 默认右臂姿态（任务启动时的初始臂姿）。"""
+        return self._right_arm_default.clone()
+
     def _slew_arm(self, q_tgt: torch.Tensor) -> torch.Tensor:
         # 夹持冻臂时慢跟；抬起走规划关节轨迹，不能限太死。
         phase = self.fsm.phase.value
@@ -295,7 +299,11 @@ class CESGraspActionProvider(DDSRLActionProvider):
             elif cmd.tcp_pos is not None:
                 try:
                     q_des = self.ik.solve(
-                        cmd.tcp_pos, cmd.tcp_quat, q_ref=cmd.arm_q_ref
+                        cmd.tcp_pos,
+                        cmd.tcp_quat,
+                        q_ref=cmd.arm_q_ref,
+                        q_lo=cmd.arm_q_lo,
+                        q_hi=cmd.arm_q_hi,
                     )
                     full_action[self._right_arm_idx] = self._slew_arm(q_des[0])
                 except Exception as e:

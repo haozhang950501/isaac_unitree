@@ -3,8 +3,15 @@
 """CES LoadingLine 取放状态机。
 
 路点开：SETTLE → GOTO_PICK → UNFOLD(00→30) → DESCEND(锁XY、只落Z、40 仅 q_ref)
-→ GRASP → LIFT → CARRY/HOLD → GOTO_PLACE(snap/walk) → PLACE_APPROACH(抬起姿态 IK)
-→ RELEASE → RETRACT。
+→ GRASP → LIFT → RETURN_HOME(逆序回 00) → CARRY/HOLD → GOTO_PLACE(snap/walk)
+→ PLACE_APPROACH(抬臂再前伸) → RELEASE → RETRACT(逆序回 00)。
+
+机器人 spawn 就在抓取站，SETTLE/GOTO_PICK 只是把骨盆钉在原地，不瞬移。
+
+夹住抬起后按抓取路点的逆序回到初始右臂姿态，件夹在手里；到位后才开始后退。
+`--station_mode walk` 的 GOTO_PLACE 走 `CARRY_WALK_LEGS`：先后退到与灰色托盘
+对齐（目标点收了 `WALK_BACKOFF_TRIM`，宁可退不够），再原地右转正对桌子，最后
+正向走进放置站。
 """
 from __future__ import annotations
 
@@ -17,7 +24,7 @@ import torch
 from isaaclab.utils.math import quat_apply, quat_from_matrix, subtract_frame_transforms
 
 from action_provider.ces_grasp import constants as C
-from action_provider.ces_grasp.navigation import plan_turn_then_forward
+from action_provider.ces_grasp.navigation import LegWalkPlanner
 from action_provider.ces_grasp.pose_library import CesWaypointSet, load_waypoint_set
 from action_provider.manip_common import CartesianInterpolator, JointSpaceInterpolator
 from action_provider.manip_common.interpolation import ease_in_out, lerp
@@ -31,6 +38,7 @@ class CesPickPlacePhase(enum.Enum):
     DESCEND = "descend"
     GRASP = "grasp"
     LIFT = "lift"
+    RETURN_HOME = "return_home"
     HOLD = "hold"
     CARRY = "carry"
     GOTO_PLACE = "goto_place"
@@ -55,6 +63,8 @@ class CesCommand:
     failed: bool
     arm_q: torch.Tensor | None
     arm_q_ref: torch.Tensor | None = None
+    arm_q_lo: torch.Tensor | None = None
+    arm_q_hi: torch.Tensor | None = None
 
 
 def top_down_grasp_quat(jaw_axis_w: torch.Tensor) -> torch.Tensor:
@@ -103,7 +113,6 @@ class CesPickPlaceStateMachine:
         self.phase = CesPickPlacePhase.SETTLE
         self.t = 0.0
         self.hold = 0.0
-        self._nav_i = 0
         self._log_t = 0.0
         self._walk = [0.0, 0.0, 0.0, 0.8]
         self.gripper = C.GRIPPER_OPEN
@@ -118,8 +127,12 @@ class CesPickPlaceStateMachine:
         self._carry_arm_q: torch.Tensor | None = None
         self._grasp_arm_q: torch.Tensor | None = None
         self._place_arm_q: torch.Tensor | None = None
+        self._place_raise_q: torch.Tensor | None = None
+        self._place_limits: tuple[torch.Tensor, torch.Tensor] | None = None
         self._dbg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._walk_mode = "idle"
+        self._walk_leg = 0
+        self._planner: LegWalkPlanner | None = None
         self._walk_unstable_t = 0.0
         self._place_lock_xy: tuple[float, float] | None = None
         self._place_lock_yaw: float | None = None
@@ -137,7 +150,8 @@ class CesPickPlaceStateMachine:
             f"pick_stand=({C.PICK_STAND_XY[0]:.3f},{C.PICK_STAND_XY[1]:.3f}) "
             f"place_stand=({C.PLACE_STAND_XY[0]:.3f},{C.PLACE_STAND_XY[1]:.3f}) "
             f"x_b_place={C.X_B_PLACE:.2f} "
-            f"(pick snap; place {self.station_mode}; Dex1 friction grasp; arm held while carrying)"
+            f"(spawn on pick stand; place {self.station_mode}; Dex1 friction grasp; "
+            f"arm returns to the start posture before carrying)"
             f"{extra}"
         )
 
@@ -145,7 +159,6 @@ class CesPickPlaceStateMachine:
         self.phase = CesPickPlacePhase.SETTLE
         self.t = 0.0
         self.hold = 0.0
-        self._nav_i = 0
         self.gripper = C.GRIPPER_OPEN
         self._walk = [0.0, 0.0, 0.0, 0.8]
         self._grasp_pos_w = None
@@ -159,6 +172,8 @@ class CesPickPlaceStateMachine:
         self._carry_arm_q = None
         self._grasp_arm_q = None
         self._place_arm_q = None
+        self._place_raise_q = None
+        self._place_limits = None
         self._q_wp30 = None
         self._q_wp40 = None
         self._wp_arrive_names = []
@@ -168,6 +183,9 @@ class CesPickPlaceStateMachine:
         self.joint_interp.clear()
         self._dbg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._walk_mode = "idle"
+        self._walk_leg = 0
+        if self._planner is not None:
+            self._planner.reset()
         self._walk_unstable_t = 0.0
         self._place_lock_xy = None
         self._place_lock_yaw = None
@@ -179,7 +197,9 @@ class CesPickPlaceStateMachine:
         self.phase = phase
         self.t = 0.0
         self.hold = 0.0
-        self._nav_i = 0
+        if phase is CesPickPlacePhase.GOTO_PLACE and self._planner is not None:
+            self._planner.reset()
+            self._walk_leg = 0
 
     def _cmd(
         self,
@@ -193,6 +213,7 @@ class CesPickPlaceStateMachine:
         failed=False,
         arm_q=None,
         arm_q_ref=None,
+        arm_limits=None,
     ) -> CesCommand:
         if (
             not snap
@@ -203,11 +224,13 @@ class CesPickPlaceStateMachine:
                 CesPickPlacePhase.DESCEND,
                 CesPickPlacePhase.GRASP,
                 CesPickPlacePhase.LIFT,
+                CesPickPlacePhase.RETURN_HOME,
             )
         ):
             snap = True
             snap_xy = C.PICK_STAND_XY
             snap_yaw = C.PICK_STAND_YAW
+        q_lo, q_hi = arm_limits if arm_limits is not None else (None, None)
         return CesCommand(
             tcp_pos=tcp,
             tcp_quat=quat,
@@ -220,6 +243,8 @@ class CesPickPlaceStateMachine:
             failed=failed,
             arm_q=arm_q,
             arm_q_ref=arm_q_ref,
+            arm_q_lo=q_lo,
+            arm_q_hi=q_hi,
         )
 
     def _squeezing(self) -> bool:
@@ -230,6 +255,7 @@ class CesPickPlaceStateMachine:
             return self.stop_after == "lift"
         return self.phase in (
             CesPickPlacePhase.LIFT,
+            CesPickPlacePhase.RETURN_HOME,
             CesPickPlacePhase.CARRY,
             CesPickPlacePhase.HOLD,
             CesPickPlacePhase.GOTO_PLACE,
@@ -302,18 +328,15 @@ class CesPickPlaceStateMachine:
         self._place_pos_w = place
         self._place_quat_w = self._grasp_quat_w.clone()
 
-    def _nav_goals(self, kind: str) -> list[tuple[tuple[float, float], float, bool]]:
-        """Walk targets: (xy, yaw, require_yaw)."""
+    def _stand_goal(self, kind: str) -> tuple[tuple[float, float], float]:
+        """Final stand pose for a station."""
         if kind == "pick":
-            return [(C.PICK_STAND_XY, C.PICK_STAND_YAW, True)]
-        return [
-            (C.PLACE_VIA_XY, C.PICK_STAND_YAW, False),
-            (C.PLACE_STAND_XY, C.PLACE_STAND_YAW, True),
-        ]
+            return C.PICK_STAND_XY, C.PICK_STAND_YAW
+        return C.PLACE_STAND_XY, C.PLACE_STAND_YAW
 
     def _navigate(self, kind: str) -> tuple[bool, tuple[float, float], float, bool]:
         """Snap the pelvis to the stand and hold it (定位)."""
-        xy, yaw, _ = self._nav_goals(kind)[-1]
+        xy, yaw = self._stand_goal(kind)
         if self.t < C.STAND_MIN_TIME:
             return False, xy, yaw, True
         if self.t > 6.0:
@@ -327,12 +350,12 @@ class CesPickPlaceStateMachine:
         return arrived, xy, yaw, True
 
     def _loco(self, kind: str) -> tuple[bool, tuple[float, float], float, bool]:
-        """Drive the locomotion policy toward ``_nav_goals`` without root slewing."""
-        goals = self._nav_goals(kind)
-        i = min(self._nav_i, len(goals) - 1)
-        xy, yaw, require_yaw = goals[i]
-        last = i >= len(goals) - 1
-        at_goal = self._guide_toward(xy, yaw, require_yaw)
+        """Walk the carry route (后退 → 右转 → 前进) without root slewing.
+
+        Only ``kind="place"`` walks: the pick stand is still reached by snapping.
+        """
+        xy, yaw = self._stand_goal(kind)
+        at_goal = self._guide_route()
         if self.ctx.stance_tilt() > C.WALK_ABORT_TILT:
             self._walk_unstable_t += self.ctx.dt
         else:
@@ -346,53 +369,50 @@ class CesPickPlaceStateMachine:
             self._transition(CesPickPlacePhase.FAILED)
             return False, xy, yaw, False
         timeout = C.WALK_PLACE_TIMEOUT if kind == "place" else C.WALK_GOTO_TIMEOUT
-        if at_goal and not last:
-            self._nav_i += 1
-            self.hold = 0.0
-            print(f"[ces_fsm] {kind} waypoint {i + 1}/{len(goals)}")
-            return self._loco(kind)
         if self.t > timeout and not at_goal:
             print(
                 f"[ces_fsm] WALK timeout in {self.phase.value} "
-                f"(nav_i={self._nav_i}) — marking FAILED, not arriving"
+                f"(leg={self._walk_leg}) — marking FAILED, not arriving"
             )
             self._transition(CesPickPlacePhase.FAILED)
             return False, xy, yaw, False
-        arrived = bool(at_goal and last)
-        return arrived, xy, yaw, arrived
+        return at_goal, xy, yaw, at_goal
 
-    def _guide_toward(
-        self,
-        target_xy: tuple[float, float],
-        target_yaw: float,
-        require_yaw: bool,
-    ) -> bool:
-        """Convert a world goal into a forward-only body-frame gait command."""
+    def _walk_planner(self) -> LegWalkPlanner:
+        if self._planner is None:
+            self._planner = LegWalkPlanner(list(C.CARRY_WALK_LEGS), C.CARRY_WALK_GAIT)
+            legs = " → ".join(
+                f"{leg.name}({leg.kind})" for leg in C.CARRY_WALK_LEGS
+            )
+            corner = C.CARRY_WALK_LEGS[0].target_xy
+            print(
+                f"[ces_fsm] carry route {legs} "
+                f"backoff=({corner[0]:.3f},{corner[1]:.3f}) "
+                f"tray_center=({C.PLACE_TARGET_XY[0]:.3f},{C.PLACE_TARGET_XY[1]:.3f}) "
+                f"cmd |vx|={C.WALK_VX:.2f} |wz|={C.WALK_WZ:.2f} "
+                f"(fixed magnitudes; the policy ignores small commands)"
+            )
+        return self._planner
+
+    def _guide_route(self) -> bool:
+        """Step the leg planner and publish its body-frame command."""
         root_pos, _root_quat = self.ctx.get_base_pose_w()
         x, y = float(root_pos[0, 0]), float(root_pos[0, 1])
         yaw = self.ctx.get_heading()
-        dx, dy = target_xy[0] - x, target_xy[1] - y
-        plan = plan_turn_then_forward(
-            x=x,
-            y=y,
-            yaw=yaw,
-            target_xy=target_xy,
-            target_yaw=target_yaw,
-            require_yaw=require_yaw,
-            pos_tolerance=C.WALK_POS_ARRIVE,
-            yaw_tolerance=C.WALK_YAW_ARRIVE,
-            align_tolerance=C.WALK_ALIGN_YAW,
-            min_vx=C.WALK_MIN_VX,
-            max_vx=C.WALK_MAX_VX,
-            distance_gain=C.WALK_DISTANCE_GAIN,
-            yaw_gain=C.WALK_YAW_GAIN,
-            max_wz=C.WALK_MAX_WZ,
-        )
-        self._walk = list(plan.command)
-        self._walk_mode = plan.mode
-        self._dbg = (x, y, plan.distance, yaw, dx, dy, plan.yaw_error)
+        planner = self._walk_planner()
+        step = planner.step(x, y, yaw, self.ctx.dt)
+        if step.leg_index != self._walk_leg:
+            self._walk_leg = step.leg_index
+            print(
+                f"[ces_fsm] walk leg {step.leg_index + 1}/{len(planner.legs)} "
+                f"{step.leg_name} at ({x:.3f},{y:.3f}) "
+                f"head={math.degrees(yaw):.0f}deg"
+            )
+        self._walk = list(step.command)
+        self._walk_mode = step.mode
+        self._dbg = (x, y, step.remaining, yaw, step.lateral, 0.0, step.yaw_error)
 
-        if not plan.pose_ready:
+        if not step.route_done:
             self.hold = 0.0
             return False
         if self.ctx.is_standing():
@@ -457,6 +477,94 @@ class CesPickPlaceStateMachine:
             f"dur={C.LIFT_TIME:.2f}s (no per-frame IK)"
         )
 
+    def _home_arm_q(self) -> torch.Tensor:
+        """初始右臂姿态：有关节路点用 00，否则用机器人默认臂姿。"""
+        if self._waypoints is not None:
+            return self._pose_q(self._waypoints.joint_waypoints[0])
+        home = self.ctx.get_right_arm_home_q()
+        return home[0].clone() if home.dim() > 1 else home.clone()
+
+    def _begin_return_home(self):
+        """抬起后按抓取路点的逆序回到初始臂姿，件夹在手里一起回来。
+
+        逆序走原路，出上料口的间隙和进去时一样；到位后才开始后退，
+        走路时右臂就是初始姿态。
+        """
+        q_now = self.ctx.get_right_arm_q()[0].clone()
+        if self._waypoints is not None:
+            names = list(reversed(self._waypoints.joint_waypoints))
+            qs = [q_now] + [self._pose_q(name) for name in names]
+            durations = [C.RETURN_LEAD_IN_TIME] + list(
+                reversed(self._waypoints.joint_segment_durations)
+            )
+            path = "→".join(names)
+        else:
+            qs = [q_now, self._home_arm_q()]
+            durations = [C.RETURN_TIME]
+            path = "default_arm"
+        self.joint_interp.reset_path(qs, durations)
+        print(
+            f"[ces_fsm] return arm home (reverse) {path} "
+            f"dur={sum(durations):.2f}s (gripper stays closed)"
+        )
+
+    def _body_forward_w(self) -> torch.Tensor:
+        """Unit body-forward vector in world coordinates, shape [1, 3]."""
+        root_pos, root_quat = self.ctx.get_base_pose_w()
+        fwd = torch.tensor([[1.0, 0.0, 0.0]], device=self.device, dtype=root_pos.dtype)
+        return quat_apply(root_quat, fwd)
+
+    def _place_joint_window(self, q_home: torch.Tensor):
+        """放置 IK 的关节窗口：肘不外翻、腕几乎不转。
+
+        肩内外旋 / 肩偏摆贴住初始臂姿，抬臂靠肩俯仰 + 肘完成；腕三轴锁在
+        初始值附近，所以位置 IK 只能用自然的前摆解，解不出鸡翅膀姿态。
+        """
+        ik = self.ctx.ik
+        lo, hi = ik.q_min.clone(), ik.q_max.clone()
+        idx = {name: i for i, name in enumerate(C.RIGHT_ARM_JOINTS)}
+        windows = {
+            "right_shoulder_roll_joint": C.PLACE_ROLL_WINDOW,
+            "right_shoulder_yaw_joint": C.PLACE_YAW_WINDOW,
+            "right_wrist_roll_joint": C.PLACE_WRIST_WINDOW,
+            "right_wrist_pitch_joint": C.PLACE_WRIST_WINDOW,
+            "right_wrist_yaw_joint": C.PLACE_WRIST_WINDOW,
+        }
+        for name, win in windows.items():
+            i = idx[name]
+            lo[i] = torch.clamp(q_home[i] - win, min=float(ik.q_min[i]))
+            hi[i] = torch.clamp(q_home[i] + win, max=float(ik.q_max[i]))
+        elbow = idx["right_elbow_joint"]
+        lo[elbow] = max(float(lo[elbow]), C.PLACE_ELBOW_MIN)
+        return lo, hi
+
+    def _capture_place_raise_q(self):
+        """记下抬臂段末的关节姿态，收臂时按它原路退回。"""
+        if self._place_raise_q is not None or not self.interp.bounds:
+            return
+        if self.interp.elapsed + 1e-9 >= self.interp.bounds[0]:
+            self._place_raise_q = self.ctx.get_right_arm_q()[0].clone()
+            self._log_tcp("place_raise")
+
+    def _begin_retract(self):
+        """按放置轨迹的逆序收臂：灰筐上方 → 抬臂点 → 初始臂姿。"""
+        q_now = self.ctx.get_right_arm_q()[0].clone()
+        home = self._carry_arm_q if self._carry_arm_q is not None else self._home_arm_q()
+        qs, durations, names = [q_now], [], []
+        if self._place_raise_q is not None:
+            qs.append(self._place_raise_q)
+            durations.append(C.RETRACT_TIME)
+            names.append("raise")
+        qs.append(home)
+        durations.append(C.RETRACT_HOME_TIME)
+        names.append("home")
+        self._place_arm_q = home.clone()
+        self.joint_interp.reset_path(qs, durations)
+        print(
+            f"[ces_fsm] retract arm (reverse) {'→'.join(names)} "
+            f"dur={sum(durations):.2f}s"
+        )
+
     def _maybe_log(self, extra: str = ""):
         self._log_t += self.ctx.dt
         interval = 0.25 if self.phase in (
@@ -476,16 +584,17 @@ class CesPickPlaceStateMachine:
         ):
             tcp_err = self.ctx.ik.position_error_norm(self._grasp_pos_w)
         extra = extra or ""
-        if self.phase in (CesPickPlacePhase.GOTO_PICK, CesPickPlacePhase.GOTO_PLACE):
-            x, y, d, yaw, _dx, _dy, _yaw_err = self._dbg
-            if d < 1e-6:
-                return
+        if (
+            self.phase in (CesPickPlacePhase.GOTO_PICK, CesPickPlacePhase.GOTO_PLACE)
+            and self._walk_mode != "idle"
+        ):
+            x, y, remaining, yaw, lateral, _unused, yaw_err = self._dbg
             z = float(self.ctx.get_base_pose_w()[0][0, 2])
             extra = (
-                f"nav={self._nav_i} mode={self._walk_mode} "
+                f"leg={self._walk_leg} mode={self._walk_mode} "
                 f"cmd_b=({self._walk[0]:+.2f},{self._walk[1]:+.2f},{self._walk[2]:+.2f}) "
-                f"xy=({x:.2f},{y:.2f}) d={d:.2f} "
-                f"head={math.degrees(yaw):.0f} err={math.degrees(_yaw_err):+.0f}deg "
+                f"xy=({x:.2f},{y:.2f}) rem={remaining:+.2f} lat={lateral:+.2f} "
+                f"head={math.degrees(yaw):.0f} err={math.degrees(yaw_err):+.0f}deg "
                 f"z={z:.3f} {extra}"
             ).strip()
         print(
@@ -657,34 +766,47 @@ class CesPickPlaceStateMachine:
         self.joint_interp.reset_path(qs, durations)
 
     def _begin_place_approach(self):
-        """从抬起姿态 IK 到桌上方。锁朝向，q_ref=lift；已靠近则只落 Z。"""
-        now, q_now = self.ctx.ik.get_tcp_pose_w()
+        """初始臂姿 → 抬到放置高度 → 水平伸到灰筐上方。
+
+        两段笛卡尔路径：① 贴身抬臂（只往前挪一点点，避免死折肘）先升到放置
+        高度，桌沿和灰筐沿都在手下方；② 保持这个高度水平伸过去。所以件永远
+        不会被拖着扫过桌面。IK 只跟位置、不给朝向目标，姿态由
+        :meth:`_place_joint_window` 的关节窗口约束，肘不外翻、腕几乎不转。
+        """
+        now, _q_now = self.ctx.ik.get_tcp_pose_w()
         drop = self._place_drop_pos()
-        dxy = math.hypot(
-            float(drop[0, 0] - now[0, 0]),
-            float(drop[0, 1] - now[0, 1]),
-        )
-        goal = now.clone()
-        goal[:, 2] = float(drop[0, 2])
-        hold_xy = dxy <= C.PLACE_HOLD_XY_M
-        if not hold_xy:
-            goal[:, 0] = drop[0, 0]
-            goal[:, 1] = drop[0, 1]
+        drop_z = float(drop[0, 2])
+        q_home = self._carry_arm_q
+        if q_home is None:
+            q_home = self.ctx.get_right_arm_q()[0].clone()
+            self._carry_arm_q = q_home
+        self._place_limits = self._place_joint_window(q_home)
+        self._place_raise_q = None
+
+        lift_pt = now + self._body_forward_w() * C.PLACE_RAISE_FORWARD
+        lift_pt[:, 2] = drop_z
+        goal = drop.clone()
+        goal[:, 2] = drop_z
         self._place_pos_w = goal.clone()
-        self._place_quat_w = q_now.clone()
-        if self._carry_arm_q is None:
-            self._carry_arm_q = self.ctx.get_right_arm_q()[0].clone()
-        self.interp.reset(now, goal, C.PLACE_APPROACH_TIME, q_now, q_now)
-        mode = "hold_xy+drop_z" if hold_xy else "slide_xy+drop_z"
+        self._place_quat_w = None  # 只跟位置：给朝向目标会把腕拧一大圈
+        self.interp.reset_path(
+            [now, lift_pt, goal], [C.PLACE_RAISE_TIME, C.PLACE_REACH_TIME]
+        )
+        reach = math.hypot(
+            float(goal[0, 0] - lift_pt[0, 0]), float(goal[0, 1] - lift_pt[0, 1])
+        )
+        src = "walk" if self._place_lock_xy is not None else "snap"
         print(
-            f"[ces_fsm] at table stand — IK place from lift ({mode}) "
-            f"dxy={dxy*1000:.0f}mm z={float(now[0, 2]):.3f}->{float(goal[0, 2]):.3f} "
-            f"(hold lift orientation; q_ref=lift)"
+            f"[ces_fsm] at table stand ({src}) — raise then place: "
+            f"z={float(now[0, 2]):.3f}->{drop_z:.3f} "
+            f"then reach {reach*1000:.0f}mm to "
+            f"({float(goal[0, 0]):.3f},{float(goal[0, 1]):.3f}) "
+            f"dur={self.interp.duration:.2f}s (position-only IK, posture窗口锁腕/肘)"
         )
         self._log_tcp("place_start")
 
     def _q_ref_for_place(self) -> torch.Tensor | None:
-        """放置 IK 用抬起 q，避免重新解出怪姿态。"""
+        """放置 IK 的零空间提示：初始臂姿，零空间把肘拉回体侧。"""
         return self._carry_arm_q
 
     def _q_ref_for_descend(self) -> torch.Tensor | None:
@@ -739,9 +861,10 @@ class CesPickPlaceStateMachine:
                 x, y = float(root_pos[0, 0]), float(root_pos[0, 1])
                 px, py = C.PICK_STAND_XY
                 print(
-                    f"[ces_fsm] snap to pick stand "
+                    f"[ces_fsm] settled on the pick stand "
                     f"robot=({x:.2f},{y:.2f}) head={math.degrees(yaw):.0f}° "
-                    f"pick=({px:.2f},{py:.2f}) d={math.hypot(px - x, py - y):.2f}"
+                    f"pick=({px:.2f},{py:.2f}) d={math.hypot(px - x, py - y):.2f} "
+                    f"(spawned here, no teleport)"
                 )
                 self._transition(CesPickPlacePhase.GOTO_PICK)
                 if hasattr(self.ctx, "reset_walk_filt"):
@@ -866,11 +989,26 @@ class CesPickPlaceStateMachine:
                 q = self.ctx.get_right_arm_q()[0]
             if self.joint_interp.finished or self.t > C.LIFT_TIME + 0.5:
                 self._carry_arm_q = q.clone()
-                print(
-                    f"[ces_fsm] lifted — freeze arm q={self._fmt_q(q)} "
-                    f"(HOLD 用此 q 走路/换站)"
-                )
+                print(f"[ces_fsm] lifted — arm q={self._fmt_q(q)}")
                 self._log_tcp("lift_done")
+                self._begin_return_home()
+                self._transition(CesPickPlacePhase.RETURN_HOME)
+            return self._cmd(tcp=None, arm_q=q)
+
+        if self.phase is CesPickPlacePhase.RETURN_HOME:
+            self.gripper = C.GRIPPER_CLOSED
+            q = self.joint_interp.step(self.ctx.dt)
+            if q is None:
+                q = self._carry_arm_q
+            if q is None:
+                q = self.ctx.get_right_arm_q()[0]
+            if self.joint_interp.finished or self.t > self.joint_interp.duration + 1.0:
+                self._carry_arm_q = q.clone()
+                print(
+                    f"[ces_fsm] arm back at start posture q={self._fmt_q(q)} "
+                    f"(carry the product there)"
+                )
+                self._log_tcp("home_done")
                 self._transition(CesPickPlacePhase.CARRY)
             return self._cmd(tcp=None, arm_q=q)
 
@@ -913,7 +1051,8 @@ class CesPickPlaceStateMachine:
                 if self.station_mode == "walk":
                     print(
                         "[ces_fsm] walk to table "
-                        "(turn to world route, forward-only vx, arm frozen, gripper closed)"
+                        "(back out → turn right → walk in; fixed-magnitude commands, "
+                        "arm frozen, gripper closed)"
                     )
                     if hasattr(self.ctx, "reset_walk_filt"):
                         self.ctx.reset_walk_filt()
@@ -953,7 +1092,10 @@ class CesPickPlaceStateMachine:
                     print(
                         f"[ces_fsm] walk arrived — lock actual pelvis "
                         f"xy=({xy[0]:.3f},{xy[1]:.3f}) "
-                        f"yaw={math.degrees(yaw):.1f}deg"
+                        f"yaw={math.degrees(yaw):.1f}deg "
+                        f"(stand err dxy="
+                        f"{math.hypot(xy[0] - C.PLACE_STAND_XY[0], xy[1] - C.PLACE_STAND_XY[1])*1000:.0f}mm "
+                        f"dyaw={math.degrees(C.wrap_angle(yaw - C.PLACE_STAND_YAW)):+.1f}deg)"
                     )
                 self._begin_place_approach()
                 self._transition(CesPickPlacePhase.PLACE_APPROACH)
@@ -969,20 +1111,25 @@ class CesPickPlaceStateMachine:
         if self.phase is CesPickPlacePhase.PLACE_APPROACH:
             self.gripper = C.GRIPPER_CLOSED
             drop = self._place_pos_w if self._place_pos_w is not None else self._place_drop_pos()
-            quat_hold = self._place_quat_w
-            pos, quat = self.interp.step(self.ctx.dt)
-            if pos is None or quat is None:
-                pos, quat = drop, quat_hold
-            if self.interp.finished or self.t > C.PLACE_APPROACH_TIME + 1.0:
+            pos, _quat = self.interp.step(self.ctx.dt)
+            if pos is None:
+                pos = drop
+            self._capture_place_raise_q()
+            if self.interp.finished or self.t > C.PLACE_APPROACH_TIME + 1.5:
                 self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
-                print("[ces_fsm] drop height reached — open gripper, let product fall")
+                err = self.ctx.ik.position_error_norm(drop)
+                print(
+                    f"[ces_fsm] over the tote (tcp_err={err*1000:.0f}mm) — "
+                    f"open gripper, let product fall"
+                )
                 self._log_tcp("place_release")
                 self._transition(CesPickPlacePhase.RELEASE)
             pin_xy, pin_yaw = self._place_pin_pose()
             return self._cmd(
                 tcp=pos,
-                quat=quat,
+                quat=self._place_quat_w,
                 arm_q_ref=self._q_ref_for_place(),
+                arm_limits=self._place_limits,
                 snap=True,
                 snap_xy=pin_xy,
                 snap_yaw=pin_yaw,
@@ -1005,6 +1152,7 @@ class CesPickPlaceStateMachine:
             self.gripper = C.GRIPPER_OPEN
             q = self._frozen_place_arm()
             if self.t >= C.RELEASE_TIME:
+                self._begin_retract()
                 self._transition(CesPickPlacePhase.RETRACT)
             pin_xy, pin_yaw = self._place_pin_pose()
             return self._cmd(
@@ -1017,8 +1165,12 @@ class CesPickPlaceStateMachine:
 
         if self.phase is CesPickPlacePhase.RETRACT:
             self.gripper = C.GRIPPER_OPEN
-            q = self._frozen_place_arm()
-            if self.t >= C.RETRACT_TIME:
+            q = self.joint_interp.step(self.ctx.dt)
+            if q is None:
+                q = self._frozen_place_arm()
+            if self.joint_interp.finished or self.t > self.joint_interp.duration + 1.0:
+                self._place_arm_q = q.clone()
+                print("[ces_fsm] arm back at start posture — task done")
                 self._transition(CesPickPlacePhase.DONE)
             pin_xy, pin_yaw = self._place_pin_pose()
             return self._cmd(

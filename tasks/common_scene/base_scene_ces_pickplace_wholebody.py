@@ -45,7 +45,8 @@ PLACE_TRAY_HEIGHT = _PLACE_TRAY_LOCAL_HEIGHT * TABLE_SCALE_Z
 # Before rotation (robot faces +X toward CES):
 #   CES origin ≈ (-1.73, -1.33); robot ~1.9 m west; table on robot's right.
 # After +180° the robot faces -X and the default +X/+Y viewport looks over
-# its shoulder at the machine front.
+# its shoulder at the machine front.  The pre-rotation robot spot only fixes
+# the cluster centroid — the robot spawns on the pick stand (see below).
 # ---------------------------------------------------------------------------
 _PRODUCT_LOCAL_IDENTITY = (0.469837, 0.871558, -0.140226)
 _PRODUCT_YAW_REL_CES = 90.0  # world yaw was 270° when CES yaw was 180°
@@ -86,7 +87,8 @@ def _rz_xy(x: float, y: float, deg: float) -> tuple[float, float]:
 
 
 _CES_YAW = _CES_YAW_BEFORE + _CLUSTER_YAW
-_ROBOT_XY = _rotate_xy(*_ROBOT_BEFORE_XY, _CLUSTER_YAW, _CLUSTER_CX, _CLUSTER_CY)
+# ``_ROBOT_BEFORE_XY`` only sets the cluster centroid now; the robot itself
+# spawns on the pick stand computed from the Product below.
 _CES_XY = _rotate_xy(*_CES_BEFORE_XY, _CLUSTER_YAW, _CLUSTER_CX, _CLUSTER_CY)
 _TABLE_XY = _rotate_xy(*_TABLE_BEFORE_XY, _CLUSTER_YAW, _CLUSTER_CX, _CLUSTER_CY)
 _PROD_LOCAL_XY = _rz_xy(_PRODUCT_LOCAL_IDENTITY[0], _PRODUCT_LOCAL_IDENTITY[1], _CES_YAW)
@@ -101,8 +103,33 @@ PRODUCT_POS = (
 )
 PRODUCT_ROT = _yaw_quat(_CES_YAW + _PRODUCT_YAW_REL_CES)
 
-ROBOT_INIT_POS = (_ROBOT_XY[0], _ROBOT_XY[1], 0.8)
-ROBOT_INIT_ROT = _yaw_quat(_ROBOT_YAW_BEFORE + _CLUSTER_YAW)  # face -X
+# The robot spawns **on** the pick stand: the arm reaches the LoadingLine tray
+# from frame one, so nothing has to teleport the pelvis at startup.
+# ``stand = product - (x_b * forward + y_b * left)``; the same offsets are
+# re-exported by action_provider/ces_grasp/constants.py.
+ROBOT_STAND_YAW = _ROBOT_YAW_BEFORE + _CLUSTER_YAW  # 180 deg, faces -X at the CES front
+PICK_STAND_X_B = 0.30  # product ahead of the robot
+PICK_STAND_Y_B = -0.38  # product on the robot's right
+
+
+def _stand_xy(
+    target_xy: tuple[float, float], yaw_deg: float, x_b: float, y_b: float
+) -> tuple[float, float]:
+    rad = math.radians(yaw_deg)
+    fwd = (math.cos(rad), math.sin(rad))
+    left = (-math.sin(rad), math.cos(rad))
+    return (
+        target_xy[0] - (x_b * fwd[0] + y_b * left[0]),
+        target_xy[1] - (x_b * fwd[1] + y_b * left[1]),
+    )
+
+
+PICK_STAND_XY = _stand_xy(
+    (PRODUCT_POS[0], PRODUCT_POS[1]), ROBOT_STAND_YAW, PICK_STAND_X_B, PICK_STAND_Y_B
+)
+
+ROBOT_INIT_POS = (PICK_STAND_XY[0], PICK_STAND_XY[1], 0.8)
+ROBOT_INIT_ROT = _yaw_quat(ROBOT_STAND_YAW)  # face -X
 
 # +X/+Y nudges the table away from the LoadingLine tray (上料口).
 _TABLE_XY_NUDGE = (0.45, 0.35)
