@@ -87,9 +87,13 @@ RETURN_LEAD_IN_TIME = 0.8  # 抬起 q → 30 的过渡段
 RETURN_TIME = 2.5  # 无关节路点时：单段回默认臂姿
 CARRY_TIME = 0.6  # 冻臂 q，不要再笛卡尔收臂（件会掉）
 HOLD_TIME = 0.3
-# 放置：从初始臂姿先抬到放置高度（贴身、只往前挪一点），再水平伸到灰筐上方。
-PLACE_RAISE_FORWARD = 0.10  # 抬臂段顺机体前方挪一点，避免死折肘
-PLACE_RAISE_TIME = 2.0
+# snap 换站前先在抓取站把件抬过桌面高度，避免垂臂瞬移嵌进桌沿。
+# q：肩俯仰上抬、肘略收、roll/yaw/腕贴 00，避免外翻和大腕旋。
+PLACE_PRE_RAISE_Q = (-0.60, -0.20, 0.00, 1.15, 0.00, 0.00, 0.00)
+PLACE_PRE_RAISE_TIME = 1.6
+# 放置：从抬臂姿态先升到放置高度（贴身、只往前挪一点），再水平伸到灰筐上方。
+PLACE_RAISE_FORWARD = 0.06  # 抬臂段顺机体前方挪一点，避免死折肘
+PLACE_RAISE_TIME = 1.6
 PLACE_REACH_TIME = 2.2
 PLACE_APPROACH_TIME = PLACE_RAISE_TIME + PLACE_REACH_TIME
 # 放置 IK 只跟位置（不给朝向目标），靠下面的窗口把姿态锁在初始臂姿附近：
@@ -119,17 +123,48 @@ WAYPOINT_LEAD_IN_TOL = 0.05
 # 关键约束：策略对小指令不迈步（键盘点动走不动，必须长按把指令拉起来），
 # 所以平移/转向都用固定幅值 + 死区，不用比例控制。幅值参考键盘长按能走的量级。
 WALK_VX = 0.45  # 前进/后退幅值；< 0.3 基本只前后晃不迈步
-WALK_VY = 0.30  # 侧移纠偏幅值
-WALK_WZ = 0.70  # 原地转向幅值（键盘 Z/X 长按约 0.7~1.0）
+# 侧移纠偏幅值。键盘 y_vel 上限 0.5，这里取 80%，与 vx/wz 各取上限 ~75% 一致。
+# 之前的 0.30 离死区只剩 20% 余量（vx 有 50%、wz 有 200%），实机侧移响应稍弱
+# 就整条被死区吃掉 —— 表现为 lat 一直冻在 0.12 不动、来回踱步。
+WALK_VY = 0.40
+# 键盘 yaw_vel 上限 1.57（send_commands_keyboard.py），后退用了上限的 75%，
+# 转向也按同一比例给，之前的 0.70 只有 45%，策略吃不动。
+WALK_WZ = 1.20
+WALK_WZ_MAX = 1.55  # 漂移保护触发后的升级幅值，仍在键盘上限内
+# 纯偏航（vx=vy=0）顶不起步态：转向段一直带着后退走，画一段弧把身子转过去。
+# 用后退而不是前进：后退是唯一实测能迈步的模式，且第③段因此保留近 1 m 行程。
+WALK_TURN_VX = 0.45
+WALK_TURN_MAX_DRIFT = 0.70  # 转弧走了这么远还没转到位 = 策略没吃下 wz
 # 指令归零后策略还会多走一点：提前 stop_margin 松"油门"。
 # 若实测停不到位（走过头撞桌 / 差太多够不到灰筐），只调这两个值。
 WALK_STOP_MARGIN = 0.15
-WALK_STOP_MARGIN_PLACE = 0.12  # 最后一段停短了手臂就要多伸，别留太大余量
-# 后退段步子容易迈大：目标点再收 20 cm，宁可退不够（第③段侧移能补）。
-WALK_BACKOFF_TRIM = 0.20
-WALK_YAW_ARRIVE = 0.15  # 转向到位死区 ≈ 8.6°
-WALK_LATERAL_TOL = 0.10  # 侧向偏差超过才侧移纠偏
-WALK_ALIGN_YAW = 0.30  # 平移中朝向纠偏死区
+# 最后一段：宁可停短，绝不许过。放置站骨盆离桌沿只有约 12 cm，走过头直接撞桌；
+# 而放置 IK 的目标是**世界**灰筐中心（见 _place_drop_pos），停短了手臂会自己多伸。
+# 0.20 撞过桌：`vx=0.45` 松手后滑行约 0.25 m，比余量还大，到 0.20 才停必然冲过去。
+# 又因为 `vx` 不能降到死区以下（低了根本不迈步），没法缓刹，只能提前松手。
+# 取 0.30 ≈ 滑行量：滑行 0.10~0.30 时落点在放置站前 0.20~0.00，**不会越过站点**。
+WALK_STOP_MARGIN_PLACE = 0.30
+# 桌沿在放置站正前方约这么远（骨盆投影）。只用于硬性禁入判定，不参与规划。
+WALK_TABLE_AHEAD_OF_STAND = 0.12
+# 骨盆离桌沿的最小安全距离：越过 (放置站 + AHEAD - SAFE) 就无条件停死并告警。
+# 这是兜底闩锁，不依赖任何规划逻辑 —— 前两次撞桌都是规划分支漏了停止条件。
+WALK_TABLE_SAFE = 0.06
+# 后退段少退一个转弧半径，让转弧终点自己落回放置站进入线（第③段几乎不用侧移）。
+WALK_TURN_LEAD = WALK_TURN_VX / WALK_WZ
+# 和 WALK_TURN_LEAD 同轴同向：lead 已经承担了"宁可退不够"，这里不用再收。
+WALK_BACKOFF_TRIM = 0.0
+# 转向的 stop_margin。实测（2026-08-19）在 0.25 处松手后还会多转约 14°，
+# 也就是余转合计约 28°，所以提前到约 23° 松手。
+WALK_YAW_ARRIVE = 0.40
+WALK_LATERAL_TOL = 0.10  # 侧向偏差超过才侧移纠偏（回差：降到 0.04 才松手）
+# 最后一段"希望"停成的姿态窗口：侧向 / 朝向。**只用于报告，不参与判停** ——
+# 桌子就在放置站前 12 cm，为了摆正而继续在桌边挪动正是前两次撞桌的原因。
+# 没进窗口只会打 off-target 告警，姿态靠进站途中的斜行去纠。
+WALK_LATERAL_ARRIVE = 0.10
+# 平移中朝向纠偏死区。实测转弧收尾会留 ~14° 残差，0.30（17°）够不到它，
+# 于是 wz 一直是 0、歪着走完最后一段；收到 0.20（11.5°）让它能被纠回来。
+WALK_ALIGN_YAW = 0.20
+WALK_YAW_ARRIVE_FINAL = WALK_ALIGN_YAW
 WALK_REALIGN_YAW = 0.60  # 歪太多：停下平移，先转正
 WALK_LEG_SETTLE = 0.5  # 每段之间零指令停稳，避免后退接右转时混合指令
 WALK_ARRIVE_HOLD = 0.35
@@ -195,9 +230,9 @@ PLACE_STAND_XY = stand_xy(PLACE_TARGET_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
 
 # HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
-# ① 后退到与灰色托盘 / 放置站对齐（backoff 角点）
-# ② 原地右转 yaw π → π/2，正对桌子
-# ③ 正向走进放置站
+# ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
+# ② 边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
+# ③ 先侧移上线再正向走进放置站，按 PLACE_STAND_XY 这个**坐标**双轴收敛
 CARRY_WALK_GAIT = WalkGait(
     vx=WALK_VX,
     vy=WALK_VY,
@@ -208,6 +243,11 @@ CARRY_WALK_GAIT = WalkGait(
     align_yaw=WALK_ALIGN_YAW,
     realign_yaw=WALK_REALIGN_YAW,
     leg_settle=WALK_LEG_SETTLE,
+    turn_vx=WALK_TURN_VX,
+    wz_max=WALK_WZ_MAX,
+    turn_max_drift=WALK_TURN_MAX_DRIFT,
+    lateral_arrive=WALK_LATERAL_ARRIVE,
+    yaw_arrive=WALK_YAW_ARRIVE_FINAL,
 )
 CARRY_WALK_LEGS = build_carry_route(
     pick_xy=PICK_STAND_XY,
@@ -216,6 +256,7 @@ CARRY_WALK_LEGS = build_carry_route(
     place_yaw=PLACE_STAND_YAW,
     place_stop_margin=WALK_STOP_MARGIN_PLACE,
     backoff_trim=WALK_BACKOFF_TRIM,
+    turn_lead=WALK_TURN_LEAD,
 )
 WALK_BACKOFF_XY = CARRY_WALK_LEGS[0].target_xy
 
