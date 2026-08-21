@@ -185,5 +185,50 @@ class SmoothJointInterpolatorTests(unittest.TestCase):
             self.assertTrue(np.all(q <= high))
 
 
+class PickSpeedScaleTests(SmoothJointInterpolatorTests):
+    """Speeding the pick up must only rescale time, never reshape the path."""
+
+    SPEED = 1.5
+
+    def make_interpolator(self):
+        interpolator = self.module.JointSpaceInterpolator("cpu")
+        interpolator.reset_path(
+            self.qs,
+            self.module.scale_segment_times(self.durations, self.SPEED),
+            method="monotone_cubic_hermite",
+        )
+        return interpolator
+
+    def test_scaling_floors_each_segment(self):
+        scaled = self.module.scale_segment_times([1.2, 0.3], 3.0, min_time=0.4)
+        self.assertAlmostEqual(scaled[0], 0.4)
+        self.assertAlmostEqual(scaled[1], 0.4)
+
+    def test_scaled_path_is_the_same_curve_in_normalized_time(self):
+        authored = super().make_interpolator()
+        fast = self.make_interpolator()
+        self.assertAlmostEqual(fast.duration, authored.duration / self.SPEED, places=6)
+        for fraction in np.linspace(0.0, 1.0, 401):
+            np.testing.assert_allclose(
+                self.sample(fast, float(fraction) * fast.duration),
+                self.sample(authored, float(fraction) * authored.duration),
+                atol=1e-9,
+            )
+
+    def test_peak_joint_rate_stays_under_the_slew_clamp(self):
+        # action_provider 每步把关节增量截断在 ARM_SLEW_RAD=0.080 rad，
+        # 控制周期 dt = 4 * 0.005 s，所以下发速度上限是 4.0 rad/s。
+        interpolator = self.make_interpolator()
+        epsilon = 1e-4
+        peak = 0.0
+        for elapsed in np.linspace(epsilon, interpolator.duration - epsilon, 2001):
+            rate = (
+                self.sample(interpolator, float(elapsed) + epsilon)
+                - self.sample(interpolator, float(elapsed) - epsilon)
+            ) / (2.0 * epsilon)
+            peak = max(peak, float(np.abs(rate).max()))
+        self.assertLess(peak, 0.080 / (4 * 0.005))
+
+
 if __name__ == "__main__":
     unittest.main()

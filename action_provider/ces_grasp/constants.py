@@ -67,9 +67,15 @@ GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
 # 放置：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
 PLACE_RELEASE_ABOVE_TABLE = 0.08
 
-SETTLE_TIME = 1.0
-STAND_MIN_TIME = 0.6
-STAND_STABLE_TIME = 0.5
+# 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
+# _apply_snap 每帧把骨盆写成 STAND_PELVIS_Z、速度清零，所以 is_standing()
+# 从第一帧就为真 —— 原来的 1.0/0.6/0.5（合计 2.1 s）纯粹是空烧。
+# 缩短的只是计时门槛，is_standing() 的判定本身没动：真站不稳仍会一直等，
+# 最坏由 _navigate 的 6 s 超时兜底。若改成非 snap 起步（机器人要自己走到
+# 抓取站、或 spawn 时会晃），把这三个值调回 1.0/0.6/0.5。
+SETTLE_TIME = 0.3
+STAND_MIN_TIME = 0.2
+STAND_STABLE_TIME = 0.2
 STAND_TILT_MAX = 0.18
 STAND_YAW_RATE_MAX = 0.45
 STAND_XY_SPEED_MAX = 0.12
@@ -119,6 +125,25 @@ STOP_AFTER = "place"
 WAYPOINT_SET_DEFAULT = "ces_pick_smooth_v1"
 WAYPOINT_LEAD_IN_TIME = 0.25
 WAYPOINT_LEAD_IN_TOL = 0.05
+
+# Pick 提速：UNFOLD(00→30) / LIFT / RETURN_HOME 这三段关节轨迹的时长整体除以
+# 这个倍率。均匀时间缩放不改关节空间曲线，只把每个速度乘以倍率，所以 URDF-viz
+# 里确认过的姿态和 monotone_cubic_hermite 的连续性都原样保留。
+# DESCEND / GRASP 不缩放：一个是落 Z 的对位精度，一个是夹爪闭合时间。
+PICK_SPEED_SCALE = 1.5
+PICK_SPEED_MIN = 0.25
+# 关节下发被 _slew_arm 限在 ARM_SLEW_RAD/dt = 0.080/0.02 = 4.0 rad/s，而
+# smooth_v1 原速峰值只有 0.89 rad/s，约 4.5 倍处轨迹才开始被截断。上限留一档
+# 余量，也因为件只靠垫面摩擦夹着，抬臂/回臂再快会甩脱。
+PICK_SPEED_MAX = 3.0
+# 缩放后单段时长的下限，避免高倍率把某一段压成阶跃。
+PICK_SEGMENT_MIN_TIME = 0.40
+
+
+def clamp_pick_speed(scale: float | None) -> float:
+    if scale is None:
+        return PICK_SPEED_SCALE
+    return min(PICK_SPEED_MAX, max(PICK_SPEED_MIN, float(scale)))
 
 # HOLD 后的双足换站。策略命令是机体系 [vx, vy, wz, height]。
 # 关键约束：策略对小指令不迈步（键盘点动走不动，必须长按把指令拉起来），

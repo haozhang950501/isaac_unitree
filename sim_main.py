@@ -122,6 +122,16 @@ parser.add_argument(
     default="ces_pick_smooth_v1",
     help="CES joint waypoint set under action_provider/ces_grasp/poses/",
 )
+parser.add_argument(
+    "--ces_pick_speed",
+    type=float,
+    default=1.5,
+    help=(
+        "CES pick arm speed multiplier (unfold / lift / return-home segment times "
+        "are divided by it; the waypoint path itself is unchanged). "
+        "1.0 = authored speed, clamped to [0.25, 3.0]"
+    ),
+)
 # add AppLauncher parameters
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
