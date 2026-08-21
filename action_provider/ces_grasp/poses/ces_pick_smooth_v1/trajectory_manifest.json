@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "name": "ces_pick_smooth_v1",
+  "source_pose_set": "ces_pick_natural_v2",
+  "runtime_ready": true,
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "pose_files": [
+    "00_ready.json",
+    "10_forward_lift_retract.json",
+    "20_right_shift_wrist_down.json",
+    "30_pre_grasp_vertical.json",
+    "40_grasp_posture_ref.json"
+  ],
+  "preview_pose_files": [
+    "00_ready.json",
+    "10_forward_lift_retract.json",
+    "20_right_shift_wrist_down.json",
+    "30_pre_grasp_vertical.json"
+  ],
+  "preview_through": "30_pre_grasp_vertical",
+  "segments": [
+    {
+      "from": "00_ready",
+      "to": "10_forward_lift_retract",
+      "duration_s": 1.75,
+      "preview_control": "continuous_monotone_cubic",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "10_forward_lift_retract",
+      "to": "20_right_shift_wrist_down",
+      "duration_s": 2.07,
+      "preview_control": "continuous_monotone_cubic",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "20_right_shift_wrist_down",
+      "to": "30_pre_grasp_vertical",
+      "duration_s": 1.2,
+      "preview_control": "continuous_monotone_cubic",
+      "future_project_control": "joint_space"
+    },
+    {
+      "from": "30_pre_grasp_vertical",
+      "to": "40_grasp_posture_ref",
+      "duration_s": 1.2,
+      "preview_control": "q_ref_only_not_commanded",
+      "future_project_control": "cartesian_vertical_ik_with_dynamic_q_ref"
+    }
+  ],
+  "preview_rate_hz": 50.0,
+  "interpolation": {
+    "method": "monotone_cubic_hermite",
+    "continuous_velocity": true,
+    "stop_at_intermediate_waypoints": false,
+    "endpoint_velocity_zero": true,
+    "shape_preserving": true
+  },
+  "future_project_handoff": {
+    "joint_space_through": "30_pre_grasp_vertical",
+    "cartesian_descent_target": "project Dex1 TCP grasp target",
+    "dynamic_q_ref_from": "30_pre_grasp_vertical",
+    "dynamic_q_ref_to": "40_grasp_posture_ref",
+    "q_ref_active_joint_subset": [
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint"
+    ],
+    "q_ref_wrist_policy": "copy_from_30_exactly"
+  },
+  "planning": {
+    "removed_as_redundant": [
+      "05_forward_reach",
+      "25_pre_grasp_xy_aligned"
+    ],
+    "target_max_waypoint_delta_rate_rad_s": 0.6,
+    "minimum_segment_duration_s": 1.2,
+    "waypoint_q_values_preserved": true
+  },
+  "viewer": {
+    "urdf": "urdf_pose_toolkit/xr_teleoperate/assets/g1/g1_body29_hand14.urdf",
+    "ik_end": "right_hand_palm_joint"
+  },
+  "validation": {
+    "validation_passed": true,
+    "violations": [],
+    "interpolation": "monotone_cubic_hermite",
+    "continuous_velocity": true,
+    "endpoint_velocity_zero": true,
+    "intermediate_full_stop": false,
+    "interior_speed_norm_rad_s": [
+      0.563947888,
+      0.373612158
+    ],
+    "max_abs_velocity_by_joint_rad_s": [
+      0.818569837,
+      0.88722353,
+      0.595537955,
+      0.60034,
+      0.545319062,
+      0.057605712,
+      0.756958979
+    ],
+    "max_abs_velocity_rad_s": 0.88722353,
+    "min_joint_limit_margin_rad": 0.148629358
+  },
+  "generated_at": "2026-08-21T12:39:17+08:00"
+}

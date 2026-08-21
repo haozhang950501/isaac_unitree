@@ -148,7 +148,8 @@ class CesPickPlaceStateMachine:
             extra = (
                 f" waypoints={self._waypoints.name} "
                 f"handoff={self._waypoints.joint_waypoints[-1]} "
-                f"q_ref={self._waypoints.q_ref_from}->{self._waypoints.q_ref_to}"
+                f"q_ref={self._waypoints.q_ref_from}->{self._waypoints.q_ref_to} "
+                f"interp={self._waypoints.interpolation_method}"
             )
         print(
             f"[ces_fsm] drop-place station_mode={self.station_mode} stop_after={self.stop_after} "
@@ -603,15 +604,18 @@ class CesPickPlaceStateMachine:
             durations = [C.RETURN_LEAD_IN_TIME] + list(
                 reversed(self._waypoints.joint_segment_durations)
             )
+            interpolation_method = self._waypoints.interpolation_method
             path = "→".join(names)
         else:
             qs = [q_now, self._home_arm_q()]
             durations = [C.RETURN_TIME]
+            interpolation_method = "segment_smoothstep"
             path = "default_arm"
-        self.joint_interp.reset_path(qs, durations)
+        self.joint_interp.reset_path(qs, durations, method=interpolation_method)
         print(
             f"[ces_fsm] return arm home (reverse) {path} "
-            f"dur={sum(durations):.2f}s (gripper stays closed)"
+            f"dur={sum(durations):.2f}s interp={interpolation_method} "
+            f"(gripper stays closed)"
         )
 
     def _body_forward_w(self) -> torch.Tensor:
@@ -842,7 +846,7 @@ class CesPickPlaceStateMachine:
         return torch.tensor(q, device=self.device, dtype=torch.float32)
 
     def _start_joint_waypoints(self):
-        """Play authored 00→10→20→25→30 in joint space from the live arm q."""
+        """Play the manifest joint path in joint space from the live arm q."""
         wp = self._waypoints
         if wp is None:
             raise RuntimeError("joint waypoints are not loaded")
@@ -869,7 +873,9 @@ class CesPickPlaceStateMachine:
                 f"dur={sum(durations):.2f}s (start≈00)"
             )
         self._wp_logged = 0
-        self.joint_interp.reset_path(qs, durations)
+        self.joint_interp.reset_path(
+            qs, durations, method=wp.interpolation_method
+        )
 
     def _begin_place_approach(self):
         """初始臂姿 → 抬到放置高度 → 水平伸到灰筐上方。

@@ -114,8 +114,9 @@ ARM_SLEW_RAD = 0.080
 ARM_SLEW_RAD_LIFT = 0.012  # 夹持后慢跟，垫面不瞬移
 STOP_AFTER = "place"
 
-# 路点 JSON 按关节名匹配，不改 DDS 下标。抓取：00→30 硬 q，30→40 只作 q_ref。
-WAYPOINT_SET_DEFAULT = "ces_pick_natural_v2"
+# 路点 JSON 按关节名匹配，不改 DDS 下标。smooth：00→10→20→30 连续速度，
+# 30→40 只作 q_ref；natural_v2 / natural_v1 仍可通过 CLI 回退。
+WAYPOINT_SET_DEFAULT = "ces_pick_smooth_v1"
 WAYPOINT_LEAD_IN_TIME = 0.25
 WAYPOINT_LEAD_IN_TOL = 0.05
 

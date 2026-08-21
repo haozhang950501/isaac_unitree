@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "name": "10_forward_lift_retract",
+  "unit": "rad",
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "q": [
+    -0.7,
+    -0.22,
+    0.38,
+    0.75,
+    0.32,
+    -0.05,
+    0.55
+  ],
+  "purpose": "Keep the chest-height forward reach and settle the wrist. Right shift starts at 20.",
+  "viewer_urdf": "urdf_pose_toolkit/xr_teleoperate/assets/g1/g1_body29_hand14.urdf",
+  "ik_end": "right_hand_palm_joint",
+  "palm_position_in_pelvis_m": [
+    0.342781342,
+    -0.091272096,
+    0.122805676
+  ],
+  "palm_orientation": {
+    "quaternion_wxyz": [
+      0.906899515,
+      -0.065596033,
+      0.061028578,
+      0.411710993
+    ],
+    "rotation_matrix": [
+      [
+        0.653539141,
+        -0.754767466,
+        0.05668036
+      ],
+      [
+        0.738754535,
+        0.652382437,
+        0.169230295
+      ],
+      [
+        -0.164706792,
+        -0.068725749,
+        0.983945346
+      ]
+    ],
+    "hand_y_down_alignment": 0.068725749
+  },
+  "dex1_two_finger_proxy": {
+    "frame_mapping": {
+      "xr_palm_+X": "dex1_hand_+Y_finger_direction",
+      "xr_palm_+Z": "dex1_hand_+X_jaw_axis"
+    },
+    "tcp_offset_along_xr_finger_m": 0.115,
+    "tcp_proxy_position_in_pelvis_m": [
+      0.417938343,
+      -0.006315324,
+      0.103864395
+    ],
+    "xr_finger_down_alignment": 0.164706792,
+    "xr_finger_down_angle_deg": 80.519798,
+    "xr_jaw_axis_parallel_pelvis_x_alignment": 0.05668036,
+    "xr_jaw_axis_to_pelvis_x_angle_deg": 86.750713,
+    "xr_spread_to_body_minus_x_alignment": -0.05668036
+  },
+  "source": "approved_urdf_viz_smooth_pick_design",
+  "captured_at": "2026-08-21T12:39:17+08:00",
+  "validation": {
+    "joint_limit_margin_rad": [
+      2.3892,
+      1.8082,
+      2.238,
+      1.3444,
+      1.652222054,
+      1.564429558,
+      1.064429558
+    ],
+    "min_joint_limit_margin_rad": 1.064429558,
+    "joint_limit_violations": [],
+    "previous_pose": "00_ready",
+    "delta_from_previous_rad": [
+      -1.05,
+      -0.04,
+      0.38,
+      -0.12,
+      0.32,
+      -0.05,
+      0.55
+    ],
+    "max_abs_delta_from_previous_rad": 1.05
+  },
+  "source_pose_file": "../ces_pick_natural_v2/10_forward_lift_retract.json"
+}

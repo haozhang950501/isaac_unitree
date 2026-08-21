@@ -21,6 +21,37 @@ def ease_in_out(s: float) -> float:
     return s * s * (3.0 - 2.0 * s)
 
 
+_JOINT_INTERPOLATION_METHODS = {
+    "segment_smoothstep",
+    "monotone_cubic_hermite",
+}
+
+
+def _monotone_cubic_slopes(
+    points: list[torch.Tensor], durations: list[float]
+) -> list[torch.Tensor]:
+    """Shape-preserving C1 waypoint velocities with resting endpoints."""
+    widths = [max(1e-3, float(duration)) for duration in durations]
+    secants = [
+        (points[index + 1] - points[index]) / widths[index]
+        for index in range(len(widths))
+    ]
+    slopes = [torch.zeros_like(point) for point in points]
+    for index in range(1, len(points) - 1):
+        before = secants[index - 1]
+        after = secants[index]
+        same_direction = before * after > 0.0
+        weight_before = 2.0 * widths[index] + widths[index - 1]
+        weight_after = widths[index] + 2.0 * widths[index - 1]
+        slope = torch.zeros_like(points[index])
+        slope[same_direction] = (weight_before + weight_after) / (
+            weight_before / before[same_direction]
+            + weight_after / after[same_direction]
+        )
+        slopes[index] = slope
+    return slopes
+
+
 def lerp(a: torch.Tensor, b: torch.Tensor, s: float) -> torch.Tensor:
     """Linear interpolation between tensors ``a`` and ``b``."""
     return a + (b - a) * s
@@ -177,8 +208,10 @@ class CartesianInterpolator:
 class JointSpaceInterpolator:
     """Time-parameterized joint-space interpolation along a sequence of q.
 
-    Same timing model as :class:`CartesianInterpolator`: each leg spends
-    ``durations[i]`` seconds and eases with :func:`ease_in_out`.
+    ``segment_smoothstep`` preserves the legacy behavior: every leg eases to a
+    complete stop at its next waypoint. ``monotone_cubic_hermite`` preserves
+    the waypoint q values but carries a continuous, shape-preserving velocity
+    through interior points; only the path endpoints stop.
     """
 
     def __init__(self, device: str):
@@ -187,15 +220,32 @@ class JointSpaceInterpolator:
         self.bounds: list[float] = []
         self.duration = 1.0
         self.elapsed = 0.0
+        self.method = "segment_smoothstep"
+        self.slopes: list[torch.Tensor] = []
 
-    def reset(self, start_q: torch.Tensor, goal_q: torch.Tensor, duration: float):
-        self.reset_path([start_q, goal_q], [duration])
+    def reset(
+        self,
+        start_q: torch.Tensor,
+        goal_q: torch.Tensor,
+        duration: float,
+        method: str = "segment_smoothstep",
+    ):
+        self.reset_path([start_q, goal_q], [duration], method=method)
 
-    def reset_path(self, qs: list[torch.Tensor], durations: list[float]):
+    def reset_path(
+        self,
+        qs: list[torch.Tensor],
+        durations: list[float],
+        method: str = "segment_smoothstep",
+    ):
         if len(qs) != len(durations) + 1:
             raise ValueError(
                 f"[JointSpaceInterpolator] {len(qs)} waypoints needs "
                 f"{len(qs) - 1} durations, got {len(durations)}"
+            )
+        if method not in _JOINT_INTERPOLATION_METHODS:
+            raise ValueError(
+                f"[JointSpaceInterpolator] unsupported interpolation method {method!r}"
             )
         self.points = [q.clone() for q in qs]
         self.bounds = []
@@ -205,12 +255,20 @@ class JointSpaceInterpolator:
             self.bounds.append(total)
         self.duration = total
         self.elapsed = 0.0
+        self.method = method
+        self.slopes = (
+            _monotone_cubic_slopes(self.points, durations)
+            if method == "monotone_cubic_hermite"
+            else []
+        )
 
     def clear(self):
         self.points = []
         self.bounds = []
         self.duration = 1.0
         self.elapsed = 0.0
+        self.method = "segment_smoothstep"
+        self.slopes = []
 
     @property
     def has_path(self) -> bool:
@@ -238,5 +296,18 @@ class JointSpaceInterpolator:
             i += 1
         leg_start = 0.0 if i == 0 else self.bounds[i - 1]
         leg_len = max(1e-6, self.bounds[i] - leg_start)
-        s = ease_in_out((self.elapsed - leg_start) / leg_len)
-        return lerp(self.points[i], self.points[i + 1], s)
+        phase = max(0.0, min(1.0, (self.elapsed - leg_start) / leg_len))
+        if self.method == "monotone_cubic_hermite":
+            s2 = phase * phase
+            s3 = s2 * phase
+            h00 = 2.0 * s3 - 3.0 * s2 + 1.0
+            h10 = s3 - 2.0 * s2 + phase
+            h01 = -2.0 * s3 + 3.0 * s2
+            h11 = s3 - s2
+            return (
+                h00 * self.points[i]
+                + h10 * leg_len * self.slopes[i]
+                + h01 * self.points[i + 1]
+                + h11 * leg_len * self.slopes[i + 1]
+            )
+        return lerp(self.points[i], self.points[i + 1], ease_in_out(phase))
