@@ -1,0 +1,189 @@
+"""CPU-only contract tests for the approved CES smooth Pick design."""
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+import types
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parents[1]
+POSES_ROOT = ROOT / "action_provider" / "ces_grasp" / "poses"
+SMOOTH_DIR = POSES_ROOT / "ces_pick_smooth_v1"
+NATURAL_V2_DIR = POSES_ROOT / "ces_pick_natural_v2"
+JOINT_NAMES = [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+JOINT_POSES = [
+    "00_ready",
+    "10_forward_lift_retract",
+    "20_right_shift_wrist_down",
+    "30_pre_grasp_vertical",
+]
+Q_REF_POSE = "40_grasp_posture_ref"
+
+
+class FakeTensor(np.ndarray):
+    """Small numpy-backed subset used to exercise the torch-free interpolator."""
+
+    def clone(self):
+        return self.copy().view(FakeTensor)
+
+
+def fake_tensor(values) -> FakeTensor:
+    return np.asarray(values, dtype=float).view(FakeTensor)
+
+
+def load_interpolation_module():
+    fake_torch = types.ModuleType("torch")
+    fake_torch.Tensor = FakeTensor
+    fake_torch.zeros_like = lambda value: np.zeros_like(value).view(FakeTensor)
+    sys.modules["torch"] = fake_torch
+    path = ROOT / "action_provider" / "manip_common" / "interpolation.py"
+    spec = importlib.util.spec_from_file_location("ces_smooth_interpolation_test", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+class SmoothPickManifestTests(unittest.TestCase):
+    def test_manifest_preserves_runtime_q_ref_contract(self):
+        manifest = read_json(SMOOTH_DIR / "trajectory_manifest.json")
+        self.assertTrue(manifest["runtime_ready"])
+        self.assertEqual(manifest["name"], "ces_pick_smooth_v1")
+        self.assertEqual(
+            manifest["pose_files"],
+            [f"{name}.json" for name in [*JOINT_POSES, Q_REF_POSE]],
+        )
+        self.assertNotIn("05_forward_reach.json", manifest["pose_files"])
+        self.assertNotIn("25_pre_grasp_xy_aligned.json", manifest["pose_files"])
+        self.assertEqual(
+            [segment["future_project_control"] for segment in manifest["segments"]],
+            [
+                "joint_space",
+                "joint_space",
+                "joint_space",
+                "cartesian_vertical_ik_with_dynamic_q_ref",
+            ],
+        )
+        self.assertEqual(
+            manifest["interpolation"]["method"], "monotone_cubic_hermite"
+        )
+        handoff = manifest["future_project_handoff"]
+        self.assertEqual(handoff["joint_space_through"], "30_pre_grasp_vertical")
+        self.assertEqual(handoff["dynamic_q_ref_from"], "30_pre_grasp_vertical")
+        self.assertEqual(handoff["dynamic_q_ref_to"], Q_REF_POSE)
+
+    def test_selected_waypoint_q_values_match_natural_v2(self):
+        for name in [*JOINT_POSES, Q_REF_POSE]:
+            smooth = read_json(SMOOTH_DIR / f"{name}.json")
+            source = read_json(NATURAL_V2_DIR / f"{name}.json")
+            self.assertEqual(smooth["joint_order"], JOINT_NAMES)
+            self.assertEqual(smooth["q"], source["q"])
+        q30 = read_json(SMOOTH_DIR / "30_pre_grasp_vertical.json")["q"]
+        q40 = read_json(SMOOTH_DIR / f"{Q_REF_POSE}.json")
+        self.assertEqual(q40["control_role"], "q_ref_only")
+        self.assertFalse(q40["unitree_arm_q_allowed"])
+        self.assertEqual(q40["q"][4:], q30[4:])
+
+    def test_pose_library_loads_runtime_sequence(self):
+        action_provider_package = types.ModuleType("action_provider")
+        action_provider_package.__path__ = [str(ROOT / "action_provider")]
+        package = types.ModuleType("action_provider.ces_grasp")
+        package.__path__ = [str(ROOT / "action_provider" / "ces_grasp")]
+        constants = types.ModuleType("action_provider.ces_grasp.constants")
+        constants.RIGHT_ARM_JOINTS = JOINT_NAMES
+        constants.WAYPOINT_SET_DEFAULT = "ces_pick_smooth_v1"
+        sys.modules["action_provider"] = action_provider_package
+        sys.modules["action_provider.ces_grasp"] = package
+        sys.modules[constants.__name__] = constants
+        action_provider_package.ces_grasp = package
+        package.constants = constants
+        path = ROOT / "action_provider" / "ces_grasp" / "pose_library.py"
+        spec = importlib.util.spec_from_file_location("ces_smooth_pose_library_test", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        waypoint_set = module.load_waypoint_set("ces_pick_smooth_v1")
+        self.assertEqual(waypoint_set.joint_waypoints, tuple(JOINT_POSES))
+        self.assertEqual(waypoint_set.q_ref_from, "30_pre_grasp_vertical")
+        self.assertEqual(waypoint_set.q_ref_to, Q_REF_POSE)
+        self.assertEqual(
+            waypoint_set.interpolation_method, "monotone_cubic_hermite"
+        )
+        natural_v2 = module.load_waypoint_set("ces_pick_natural_v2")
+        self.assertEqual(natural_v2.interpolation_method, "segment_smoothstep")
+
+
+class SmoothJointInterpolatorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_interpolation_module()
+        cls.manifest = read_json(SMOOTH_DIR / "trajectory_manifest.json")
+        cls.qs = [
+            fake_tensor(read_json(SMOOTH_DIR / f"{name}.json")["q"])
+            for name in JOINT_POSES
+        ]
+        cls.durations = [
+            float(segment["duration_s"])
+            for segment in cls.manifest["segments"][: len(JOINT_POSES) - 1]
+        ]
+
+    def make_interpolator(self):
+        interpolator = self.module.JointSpaceInterpolator("cpu")
+        interpolator.reset_path(
+            self.qs,
+            self.durations,
+            method="monotone_cubic_hermite",
+        )
+        return interpolator
+
+    def sample(self, interpolator, elapsed: float) -> np.ndarray:
+        interpolator.elapsed = max(0.0, min(interpolator.duration, elapsed))
+        return np.asarray(interpolator.step(0.0), dtype=float)
+
+    def test_hits_every_waypoint(self):
+        interpolator = self.make_interpolator()
+        np.testing.assert_allclose(self.sample(interpolator, 0.0), self.qs[0])
+        for index, bound in enumerate(interpolator.bounds):
+            np.testing.assert_allclose(
+                self.sample(interpolator, bound), self.qs[index + 1], atol=1e-9
+            )
+
+    def test_interior_velocity_is_continuous_and_nonzero(self):
+        interpolator = self.make_interpolator()
+        epsilon = 1e-4
+        for bound in interpolator.bounds[:-1]:
+            at = self.sample(interpolator, bound)
+            left = (at - self.sample(interpolator, bound - epsilon)) / epsilon
+            right = (self.sample(interpolator, bound + epsilon) - at) / epsilon
+            self.assertGreater(float(np.linalg.norm(left)), 0.05)
+            np.testing.assert_allclose(left, right, atol=5e-4)
+
+    def test_curve_does_not_overshoot_global_waypoint_range(self):
+        interpolator = self.make_interpolator()
+        low = np.min(np.asarray(self.qs), axis=0) - 1e-9
+        high = np.max(np.asarray(self.qs), axis=0) + 1e-9
+        for elapsed in np.linspace(0.0, interpolator.duration, 1001):
+            q = self.sample(interpolator, float(elapsed))
+            self.assertTrue(np.all(q >= low))
+            self.assertTrue(np.all(q <= high))
+
+
+if __name__ == "__main__":
+    unittest.main()

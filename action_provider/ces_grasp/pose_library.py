@@ -12,6 +12,10 @@ from action_provider.ces_grasp import constants as C
 _POSES_ROOT = Path(__file__).resolve().parent / "poses"
 _JOINT_SPACE = "joint_space"
 _Q_REF_CONTROL = "cartesian_vertical_ik_with_dynamic_q_ref"
+_INTERPOLATION_METHODS = {
+    "segment_smoothstep",
+    "monotone_cubic_hermite",
+}
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,7 @@ class CesWaypointSet:
     q_ref_from: str
     q_ref_to: str
     q_ref_duration: float
+    interpolation_method: str
 
 
 def _remap_q(joint_order: list[str], q: list[float], target_names: list[str]) -> tuple[float, ...]:
@@ -54,6 +59,17 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
         raise FileNotFoundError(f"CES waypoint manifest not found: {manifest_path}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    interpolation = manifest.get("interpolation", {})
+    interpolation_method = (
+        str(interpolation.get("method", "segment_smoothstep"))
+        if isinstance(interpolation, dict)
+        else str(interpolation)
+    )
+    if interpolation_method not in _INTERPOLATION_METHODS:
+        raise ValueError(
+            f"waypoint set {set_name} uses unsupported interpolation "
+            f"{interpolation_method!r}"
+        )
     target_names = list(C.RIGHT_ARM_JOINTS)
     q_by_name: dict[str, tuple[float, ...]] = {}
     for pose_file in manifest.get("pose_files", []):
@@ -106,4 +122,5 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
         q_ref_from=q_ref_from,
         q_ref_to=q_ref_to,
         q_ref_duration=q_ref_duration,
+        interpolation_method=interpolation_method,
     )

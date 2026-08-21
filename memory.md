@@ -1,8 +1,8 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-19（**Pick + Walk 换站已跑通**，归档 `pick+walk_done`）
+更新时间：2026-08-21（**Smooth Pick design 已接入**；URDF-viz / CPU 合约已验收，待 Isaac Sim / A10 物理验收）
 
-**下一阶段：优化 place 动作。** 现在放置是 DiffIK + 笛卡尔插补去追世界灰筐中心，手臂为了凑 TCP 会大幅转肩转腕。计划改成用 URDF-viz **写死几个关节姿态点**（和 pick 的 `ces_pick_natural_v2` 同一套做法），关节空间回放，不让 IK 自由发挥。见 §11。
+**下一阶段：优化 place 动作。** 现在放置是 DiffIK + 笛卡尔插补去追世界灰筐中心，手臂为了凑 TCP 会大幅转肩转腕。计划改成用 URDF-viz **写死几个关节姿态点**（复用 pick 的 `ces_pick_smooth_v1` 清单与连续插值机制），关节空间回放，不让 IK 自由发挥。见 §11。
 
 ## 1. 项目概况
 
@@ -17,7 +17,7 @@
 | **当前主任务** | `Isaac-Move-CES-Product-G129-Dex1-Wholebody` |
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
-**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（v2 自然路点，已稳定）→ 胸口高度抬起 → 逆序关节回初始右臂 → HOLD 后 `walk` 真实走到放置站 → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。
+**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → 逆序关节回初始右臂 → HOLD 后 `walk` 真实走到放置站 → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。
 
 **归档状态（2026-08-19，`pick+walk_done`）**：
 
@@ -28,6 +28,8 @@
 - 纯 CPU 导航测试 26 项已过，含 900 组撞桌扫描（§6.2 末）。
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
+
+**2026-08-21 Smooth Pick design**：用户在 `urdf_pose_toolkit` 中确认 `00→10→20→30→40` 视觉效果。项目新增 `ces_pick_smooth_v1` 并设为默认；运行时关节硬轨迹只有 `00→10→20→30`，`30→40` 仍只作下降 IK 的动态 `q_ref`。05/25 从新组移除但 V2 文件原样保留；00/10/20/30/40 的 q 与 V2 完全一致。关节插值改为清单可选的 `monotone_cubic_hermite`：中间点速度连续、不整机刹停，起终点停稳，反向 `RETURN_HOME` 同样走连续曲线。6 项 CPU 合约测试已过，尚未在 Isaac Sim / A10 验证碰撞、接触和实际抓取，不能把 URDF-viz 通过当物理验收。
 
 ---
 
@@ -55,10 +57,10 @@ python sim_main.py \
   --station_mode walk \
   --manual_sim_control \
   --ces_use_joint_waypoints \
-  --ces_waypoint_set ces_pick_natural_v2
+  --ces_waypoint_set ces_pick_smooth_v1
 ```
 
-自然路点默认 `ces_pick_natural_v2`；可用 `--ces_waypoint_set ces_pick_natural_v1` 回退。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
+默认 `ces_pick_smooth_v1`；可用 `--ces_waypoint_set ces_pick_natural_v2` 回退到已在 IsaacLab 跑通过的 V2，或用 `ces_pick_natural_v1` 回退旧姿态。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
 
 Pick 站定位始终用 snap（spawn 就在抓取站），只有夹稳后的 `GOTO_PLACE` 才释放骨盆、调用全身行走策略。
 
@@ -411,7 +413,22 @@ unitree_sim_isaaclab/
 
 运行时 30 后**锁 XY、只落 Z**，朝向 2 s slerp 到产品夹持姿态；40 只作 `q_ref`。
 
-### 姿态调优 V2（本地已完成）
+### 当前默认：Smooth Pick v1（2026-08-21）
+
+- 姿态目录：`action_provider/ces_grasp/poses/ces_pick_smooth_v1/`。
+- q 保持 V2 已验证的 `00/10/20/30/40` 不变，只去掉冗余 `05/25`。
+- 运行时硬下发：`00→10→20→30`；时长 `1.75 / 2.07 / 1.20 s`。`30→40` 的 `1.20 s` 仍是动态 `q_ref` 参考，不把 40 当 `arm_q`。
+- `trajectory_manifest.json::interpolation.method = monotone_cubic_hermite`。单调三次 Hermite 保证关节不越过相邻路点范围，速度在 10/20 连续；只有 00/30 停稳。`RETURN_HOME` 加 `0.8 s` lift→30 过渡后按 `30→20→10→00` 反向连续回放。
+- 默认已同时改到 `sim_main.py --ces_waypoint_set` 与 `constants.py::WAYPOINT_SET_DEFAULT`；V2 / V1 均保留，加载未声明插值的旧清单仍用原 `segment_smoothstep`，兼容旧行为。
+- 本地 `urdf-viz` 已完整预览 `00→10→20→30→40`，最终 q 回读误差 `1e-7 rad`；CPU 合约测试 6 项通过：
+
+```bash
+python -m unittest tools.test_ces_smooth_pick -v
+```
+
+- **待办：必须在 Isaac Sim / A10 跑一次实际 Pick**，观察 00→10 是否清抽屉、10→20 大跨越是否碰撞、30 交接 TCP、夹取与反向回臂是否稳定。当前只是 URDF / 数学轨迹 / 加载契约通过。
+
+### 姿态调优 V2（历史已完成，可回退）
 
 - 姿态目录：`action_provider/ces_grasp/poses/ces_pick_natural_v2/`。
 - 关节路点：`00→05→10→20→25→30`，按 `trajectory_manifest.json` 的时长做 smoothstep 插补。
@@ -488,10 +505,10 @@ AABB Y 比 `PRODUCT_POS` 偏 −11 mm。夹爪闭合、站稳、抬臂完成；l
 
 ### 11.2 计划：改成写死的关节姿态点
 
-和 pick 一样的做法（`ces_pick_natural_v2` 已验证有效）：用 URDF-viz 手工设计几个放置姿态点，存成 JSON，关节空间 smoothstep 插补回放，不让 IK 自由发挥。
+和 pick 一样的做法（当前默认 `ces_pick_smooth_v1`）：用 URDF-viz 手工设计几个放置姿态点，存成 JSON，关节空间连续插补回放，不让 IK 自由发挥。
 
 - 复用现成机制：`pose_library.py` + `poses/<set>/trajectory_manifest.json`，按**关节名**匹配，不改 DDS 下标。
-- 参考 pick 的经验：路点之间 `dmax` 别太大（pick 里 00→05 是 1.599 rad，偏大但能用）；腕三轴在最后一段最好不动（pick 的 40 就是三个腕关节与 30 完全相同）；最后一个点只作 `q_ref`、不硬下发。
+- 参考 pick 的经验：路点之间 `dmax` 别太大；可用 `monotone_cubic_hermite` 连续穿过中间点，但仍必须做碰撞验证。腕三轴在最后一段最好不动（pick 的 40 就是三个腕关节与 30 完全相同）；最后一个点只作 `q_ref`、不硬下发。
 - 交接点仍要留给 IK：pick 是 30 之后锁 XY 只落 Z。放置同理，可以关节路点走到灰筐上方，最后的高度微调再交给 IK。
 
 ### 11.3 place 的几何约束（设计姿态点时要满足）
