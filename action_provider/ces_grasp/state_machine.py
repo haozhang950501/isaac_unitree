@@ -28,7 +28,11 @@ from action_provider.ces_grasp import constants as C
 from action_provider.ces_grasp.navigation import LegWalkPlanner
 from action_provider.ces_grasp.pose_library import CesWaypointSet, load_waypoint_set
 from action_provider.manip_common import CartesianInterpolator, JointSpaceInterpolator
-from action_provider.manip_common.interpolation import ease_in_out, lerp
+from action_provider.manip_common.interpolation import (
+    ease_in_out,
+    lerp,
+    scale_segment_times,
+)
 
 
 class CesPickPlacePhase(enum.Enum):
@@ -95,6 +99,7 @@ class CesPickPlaceStateMachine:
         stop_after: str = "place",
         use_joint_waypoints: bool = False,
         waypoint_set: str | None = None,
+        speed_scale: float | None = None,
     ):
         self.ctx = ctx
         self.station_mode = station_mode if station_mode in ("snap", "walk") else "snap"
@@ -112,6 +117,18 @@ class CesPickPlaceStateMachine:
         self._logged_q_ref_once = False
         if self.use_joint_waypoints:
             self._waypoints = load_waypoint_set(waypoint_set or C.WAYPOINT_SET_DEFAULT)
+        self.speed_scale = C.clamp_pick_speed(speed_scale)
+        self._joint_segment_times: tuple[float, ...] = ()
+        if self._waypoints is not None:
+            self._joint_segment_times = tuple(
+                self._scaled(
+                    self._waypoints.joint_segment_durations, C.PICK_SEGMENT_MIN_TIME
+                )
+            )
+        self._wp_lead_in_time = self._scaled([C.WAYPOINT_LEAD_IN_TIME])[0]
+        self._return_lead_in_time = self._scaled([C.RETURN_LEAD_IN_TIME])[0]
+        self._return_time = self._scaled([C.RETURN_TIME], C.PICK_SEGMENT_MIN_TIME)[0]
+        self._lift_time = self._scaled([C.LIFT_TIME], C.PICK_SEGMENT_MIN_TIME)[0]
         self.phase = CesPickPlacePhase.SETTLE
         self.t = 0.0
         self.hold = 0.0
@@ -143,13 +160,16 @@ class CesPickPlaceStateMachine:
         self._place_lock_yaw: float | None = None
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
-        extra = ""
+        extra = f" arm_speed=x{self.speed_scale:.2f}"
         if self._waypoints is not None:
-            extra = (
+            extra += (
                 f" waypoints={self._waypoints.name} "
                 f"handoff={self._waypoints.joint_waypoints[-1]} "
                 f"q_ref={self._waypoints.q_ref_from}->{self._waypoints.q_ref_to} "
-                f"interp={self._waypoints.interpolation_method}"
+                f"interp={self._waypoints.interpolation_method} "
+                f"seg_s={'/'.join(f'{d:.2f}' for d in self._joint_segment_times)} "
+                f"(authored "
+                f"{'/'.join(f'{d:.2f}' for d in self._waypoints.joint_segment_durations)})"
             )
         print(
             f"[ces_fsm] drop-place station_mode={self.station_mode} stop_after={self.stop_after} "
@@ -160,6 +180,10 @@ class CesPickPlaceStateMachine:
             f"arm returns to the start posture before carrying)"
             f"{extra}"
         )
+
+    def _scaled(self, durations, min_time: float = 0.0) -> list[float]:
+        """Segment times at the current arm speed; the path shape is unchanged."""
+        return scale_segment_times(durations, self.speed_scale, min_time)
 
     def reset(self):
         self.phase = CesPickPlacePhase.SETTLE
@@ -549,10 +573,10 @@ class CesPickPlaceStateMachine:
         except Exception as exc:
             print(f"[ces_fsm] lift IK failed ({exc}) — hold grasp q")
             q_lift = q_now
-        self.joint_interp.reset(q_now, q_lift, C.LIFT_TIME)
+        self.joint_interp.reset(q_now, q_lift, self._lift_time)
         print(
             f"[ces_fsm] joint lift z+{C.LIFT_HEIGHT:.3f} y{C.LIFT_SHIFT_Y:+.3f} "
-            f"dur={C.LIFT_TIME:.2f}s (no per-frame IK)"
+            f"dur={self._lift_time:.2f}s (no per-frame IK)"
         )
 
     def _home_arm_q(self) -> torch.Tensor:
@@ -601,14 +625,14 @@ class CesPickPlaceStateMachine:
         if self._waypoints is not None:
             names = list(reversed(self._waypoints.joint_waypoints))
             qs = [q_now] + [self._pose_q(name) for name in names]
-            durations = [C.RETURN_LEAD_IN_TIME] + list(
-                reversed(self._waypoints.joint_segment_durations)
+            durations = [self._return_lead_in_time] + list(
+                reversed(self._joint_segment_times)
             )
             interpolation_method = self._waypoints.interpolation_method
             path = "→".join(names)
         else:
             qs = [q_now, self._home_arm_q()]
-            durations = [C.RETURN_TIME]
+            durations = [self._return_time]
             interpolation_method = "segment_smoothstep"
             path = "default_arm"
         self.joint_interp.reset_path(qs, durations, method=interpolation_method)
@@ -854,11 +878,11 @@ class CesPickPlaceStateMachine:
         qs = [self._pose_q(name) for name in wp.joint_waypoints]
         self._q_wp30 = qs[-1].clone()
         self._q_wp40 = self._pose_q(wp.q_ref_to)
-        durations = list(wp.joint_segment_durations)
+        durations = list(self._joint_segment_times)
         lead = torch.norm(q_now - qs[0]).item()
         if lead > C.WAYPOINT_LEAD_IN_TOL:
             qs = [q_now] + qs
-            durations = [C.WAYPOINT_LEAD_IN_TIME] + durations
+            durations = [self._wp_lead_in_time] + durations
             self._wp_arrive_names = list(wp.joint_waypoints)
             print(
                 f"[ces_fsm] joint path lead-in {lead:.3f} rad "
@@ -1099,7 +1123,7 @@ class CesPickPlaceStateMachine:
                 q = self._grasp_arm_q
             if q is None:
                 q = self.ctx.get_right_arm_q()[0]
-            if self.joint_interp.finished or self.t > C.LIFT_TIME + 0.5:
+            if self.joint_interp.finished or self.t > self._lift_time + 0.5:
                 self._carry_arm_q = q.clone()
                 print(f"[ces_fsm] lifted — arm q={self._fmt_q(q)}")
                 self._log_tcp("lift_done")

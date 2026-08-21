@@ -52,6 +52,20 @@ def _monotone_cubic_slopes(
     return slopes
 
 
+def scale_segment_times(
+    durations, scale: float, min_time: float = 0.0
+) -> list[float]:
+    """Replay the same path faster by dividing every segment time by ``scale``.
+
+    Uniform time scaling leaves the joint-space curve untouched and multiplies
+    every velocity by ``scale``, so a waypoint shape that was validated at the
+    authored speed stays valid.  ``min_time`` floors each segment so a large
+    scale cannot collapse one into a step change.
+    """
+    factor = max(1e-3, float(scale))
+    return [max(float(min_time), float(d) / factor) for d in durations]
+
+
 def lerp(a: torch.Tensor, b: torch.Tensor, s: float) -> torch.Tensor:
     """Linear interpolation between tensors ``a`` and ``b``."""
     return a + (b - a) * s

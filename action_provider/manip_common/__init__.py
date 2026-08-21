@@ -15,6 +15,7 @@ from .interpolation import (
     JointSpaceInterpolator,
     ease_in_out,
     lerp,
+    scale_segment_times,
     slerp,
 )
 
@@ -24,5 +25,6 @@ __all__ = [
     "JointSpaceInterpolator",
     "ease_in_out",
     "lerp",
+    "scale_segment_times",
     "slerp",
 ]

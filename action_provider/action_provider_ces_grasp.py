@@ -39,6 +39,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
             stop_after=getattr(args_cli, "ces_stop_after", C.STOP_AFTER) or C.STOP_AFTER,
             use_joint_waypoints=bool(getattr(args_cli, "ces_use_joint_waypoints", False)),
             waypoint_set=getattr(args_cli, "ces_waypoint_set", None) or C.WAYPOINT_SET_DEFAULT,
+            speed_scale=getattr(args_cli, "ces_pick_speed", None),
         )
         robot = env.scene["robot"]
         self._right_arm_idx = list(self.ik.joint_ids)

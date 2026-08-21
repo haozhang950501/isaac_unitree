@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-21（**Smooth Pick design 已接入**；URDF-viz / CPU 合约已验收，待 Isaac Sim / A10 物理验收）
+更新时间：2026-08-21（**Smooth Pick 已在 Isaac Sim 跑通并确认丝滑**；本次加了 pick 提速默认 1.5×、压缩启动等待、修掉 WebRTC 报错。提速待物理验收）
 
 **下一阶段：优化 place 动作。** 现在放置是 DiffIK + 笛卡尔插补去追世界灰筐中心，手臂为了凑 TCP 会大幅转肩转腕。计划改成用 URDF-viz **写死几个关节姿态点**（复用 pick 的 `ces_pick_smooth_v1` 清单与连续插值机制），关节空间回放，不让 IK 自由发挥。见 §11。
 
@@ -29,7 +29,13 @@
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
-**2026-08-21 Smooth Pick design**：用户在 `urdf_pose_toolkit` 中确认 `00→10→20→30→40` 视觉效果。项目新增 `ces_pick_smooth_v1` 并设为默认；运行时关节硬轨迹只有 `00→10→20→30`，`30→40` 仍只作下降 IK 的动态 `q_ref`。05/25 从新组移除但 V2 文件原样保留；00/10/20/30/40 的 q 与 V2 完全一致。关节插值改为清单可选的 `monotone_cubic_hermite`：中间点速度连续、不整机刹停，起终点停稳，反向 `RETURN_HOME` 同样走连续曲线。6 项 CPU 合约测试已过，尚未在 Isaac Sim / A10 验证碰撞、接触和实际抓取，不能把 URDF-viz 通过当物理验收。
+**2026-08-21 Smooth Pick design**：用户在 `urdf_pose_toolkit` 中确认 `00→10→20→30→40` 视觉效果。项目新增 `ces_pick_smooth_v1` 并设为默认；运行时关节硬轨迹只有 `00→10→20→30`，`30→40` 仍只作下降 IK 的动态 `q_ref`。05/25 从新组移除但 V2 文件原样保留；00/10/20/30/40 的 q 与 V2 完全一致。关节插值改为清单可选的 `monotone_cubic_hermite`：中间点速度连续、不整机刹停，起终点停稳，反向 `RETURN_HOME` 同样走连续曲线。**已在 Isaac Sim 实跑确认动作完全 OK 且丝滑。**
+
+**2026-08-21 Pick 提速**：动作没问题但太慢，加 `--ces_pick_speed` 时间缩放，默认 **1.5×**。只除 `UNFOLD(00→30)` / `LIFT` / `RETURN_HOME` 三段关节轨迹的**时长**，路点 q 和曲线形状一字不动（均匀时间缩放 = 同一条曲线、速度整体 ×1.5）。`DESCEND` / `GRASP` 故意不缩放。pick 段 18.4 s → 14.0 s（−24%）。详见 §10.5。
+
+**2026-08-21 启动等待压缩**：按 `s` 到右臂起动 **2.1 s → 0.7 s**。链路上没有隐藏的预热 / reset / 等 DDS，等待全是 `SETTLE_TIME` / `STAND_MIN_TIME` / `STAND_STABLE_TIME` 三个计时器；而这两个阶段骨盆被 `_apply_snap` 钉死且速度清零，`is_standing()` 第一帧即真，属于纯空烧。只改计时门槛，判定逻辑和 6 s 超时兜底都没动。详见 §2.1。
+
+**2026-08-21 WebRTC 报错修复**：`image_server` 每 10 s 刷一对 `Publisher failed to start (Timeout)` + `WebRTC Thread Error: [Errno 2]`，根因是缺 TLS 证书。生成自签名证书到 `~/.config/xr_teleoperate/`（该路径优先级高于子模块内的默认路径，**不弄脏子模块**）。该报错在独立 daemon 线程里，从未影响主循环性能。详见 §2.2。
 
 ---
 
@@ -57,16 +63,64 @@ python sim_main.py \
   --station_mode walk \
   --manual_sim_control \
   --ces_use_joint_waypoints \
-  --ces_waypoint_set ces_pick_smooth_v1
+  --ces_waypoint_set ces_pick_smooth_v1 \
+  --ces_pick_speed 1.5
 ```
 
 默认 `ces_pick_smooth_v1`；可用 `--ces_waypoint_set ces_pick_natural_v2` 回退到已在 IsaacLab 跑通过的 V2，或用 `ces_pick_natural_v1` 回退旧姿态。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
 
+`--ces_pick_speed` 是 pick 手臂的时间缩放（默认 1.5，范围 clamp 在 `[0.25, 3.0]`）。它**只除时长、不动路点**，`1.0` 就是原速。启动日志的 `[ces_fsm] drop-place ...` 行会打印 `arm_speed=` 和实际的 `seg_s=`（以及括号里 manifest 原始值），照着调即可。见 §10.5。
+
 Pick 站定位始终用 snap（spawn 就在抓取站），只有夹稳后的 `GOTO_PLACE` 才释放骨盆、调用全身行走策略。
 
-改代码后必须关仿真重开（不会热更新）。端口占用：`fuser -k 60000/tcp`。WebRTC / `image_server` 报错可忽略。
+改代码后必须关仿真重开（不会热更新）。端口占用：`fuser -k 60000/tcp`。
 
 手动控制：`回车/s` 开始，`p` 暂停，`r` 重置（机器人 + Product 回托盘 + FSM 清零），`q` 退出。
+
+按 `s` 到右臂起动约 **0.7 s**（原 2.1 s），见 §2.1。`image_server` 的 WebRTC 报错已修，见 §2.2。
+
+### 2.1 按 `s` 之后的启动延迟（2026-08-21 已优化）
+
+链路上**没有**隐藏的预热 / reset / 等 DDS：按 `s` 只是把 `simulation_paused` 置 False（`sim_main.py:597`），下一帧就进 `controller.step()`。等待全部来自状态机三个计时器：
+
+| 常量 | 原值 | 现值 | 作用 |
+|---|---|---|---|
+| `SETTLE_TIME` | 1.0 | **0.3** | SETTLE 退出的硬计时 |
+| `STAND_MIN_TIME` | 0.6 | **0.2** | GOTO_PICK 最小定位时间 |
+| `STAND_STABLE_TIME` | 0.5 | **0.2** | `is_standing()` 需连续满足的时长 |
+| **合计** | **2.1 s** | **0.7 s** | 之后进 UNFOLD，右臂首次运动 |
+
+**为什么能砍**：这两个阶段 `_apply_snap`（`action_provider_ces_grasp.py:202-218`）每帧把骨盆写成 `STAND_PELVIS_Z=0.755`、速度清零，所以 `is_standing()` 的四项（tilt / yaw_rate / xy_speed / `0.68<z<0.88`）第一帧就全满足 —— 原来是在等一个早已成立的条件。
+
+**没有削弱安全性**：只改了计时门槛，`is_standing()` 判定本身没动。真站不稳仍会一直等，最坏由 `_navigate` 的 `t>6.0s` 超时兜底（`state_machine.py:380`）。**若改成让机器人自己走到抓取站、或 spawn 时会晃，把这三个值调回 1.0/0.6/0.5。**
+
+### 2.2 `image_server` 的 WebRTC 报错（2026-08-21 已修）
+
+症状：每 10 秒重复一对
+
+```text
+image_server.py:521  Unexpected error in publish: Publisher failed to start (Timeout)
+image_server.py:460  WebRTC Thread Error: [Errno 2] No such file or directory
+```
+
+**根因**：`WebRTC_PublisherThread.run()` 建 TLS 服务器时 `ssl_context.load_cert_chain(CERT_PEM_PATH, KEY_PEM_PATH)`（`image_server.py:438`）找不到证书 → 抛 `FileNotFoundError`（第二条）。异常发生在 `self._start_event.set()`（:441）之前，于是 `wait_for_start(timeout=10.0)`（:504）干等 10 秒超时 → `ConnectionError`（第一条）。失败后 publisher 不入缓存，下次 publish 重来 → **正好 10 秒一轮**。
+
+**不影响仿真**：`_webrtc_pub` 在独立 daemon 线程（`image_server.py:1457`），10 秒阻塞卡的是它自己，主循环不受影响。
+
+**修法**（已执行）：生成自签名证书到 `~/.config/xr_teleoperate/`。`image_server.py:64-68` 的查找顺序是 `$XR_TELEOP_CERT` → `~/.config/xr_teleoperate/` → `teleimager/`，所以放用户目录**不会弄脏子模块、不动仓库任何文件**：
+
+```bash
+mkdir -p ~/.config/xr_teleoperate
+LAN_IP=$(hostname -I | awk '{print $1}')
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout ~/.config/xr_teleoperate/key.pem \
+  -out   ~/.config/xr_teleoperate/cert.pem \
+  -days 3650 -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:$LAN_IP"
+chmod 600 ~/.config/xr_teleoperate/key.pem
+```
+
+证书 10 年有效。删掉这两个文件即可回到报错状态。WebRTC 三路端口 60001/60002/60003（`teleimager/cam_config_server.yaml`），ZMQ 55555-55557 一直是好的。自签名证书浏览器会提示不安全，属正常，手动信任即可。
 
 只抓起不放置：`--ces_stop_after lift`。
 
@@ -189,13 +243,19 @@ APPROACH_STANDOFF = 0.18
 LIFT_HEIGHT       = 0.08            # 胸口高度，不要过顶
 LIFT_SHIFT_Y      = -0.06           # pick yaw=π 时世界 -Y，躲开抽屉沿
 RIGHT_ARM_READY   = (0.40, -0.42, 0.18, 1.20, 0.0, 0.95, 0.0)
-ARM_SLEW_RAD      = 0.080           # 伸手
+ARM_SLEW_RAD      = 0.080           # 伸手；/dt(0.02) → 下发速度天花板 4.0 rad/s
 ARM_SLEW_RAD_LIFT = 0.012           # 仅 carry/hold/goto_place；lift 走规划轨迹
+PICK_SPEED_SCALE  = 1.5             # pick 手臂时间缩放默认值，CLI 可覆盖
+PICK_SPEED_MAX    = 3.0             # 上限；4.5× 处才会撞 slew，留了余量
+PICK_SEGMENT_MIN_TIME = 0.40        # 缩放后单段时长下限，防止压成阶跃
 ```
 
 ### 5.3 站位
 
 ```text
+SETTLE_TIME       = 0.3             # 原 1.0；snap 钉盆下 is_standing 第一帧即真
+STAND_MIN_TIME    = 0.2             # 原 0.6
+STAND_STABLE_TIME = 0.2             # 原 0.5；三者合计 2.1s → 0.7s，见 §2.1
 STAND_PELVIS_Z = 0.755
 pick  x_b=0.30  y_b=-0.38  yaw=π     stand ≈ (-3.19, -1.33)
 place x_b=0.46  y_b=-0.18  yaw=π/2   stand ≈ (-2.27, -0.77)
@@ -420,13 +480,47 @@ unitree_sim_isaaclab/
 - 运行时硬下发：`00→10→20→30`；时长 `1.75 / 2.07 / 1.20 s`。`30→40` 的 `1.20 s` 仍是动态 `q_ref` 参考，不把 40 当 `arm_q`。
 - `trajectory_manifest.json::interpolation.method = monotone_cubic_hermite`。单调三次 Hermite 保证关节不越过相邻路点范围，速度在 10/20 连续；只有 00/30 停稳。`RETURN_HOME` 加 `0.8 s` lift→30 过渡后按 `30→20→10→00` 反向连续回放。
 - 默认已同时改到 `sim_main.py --ces_waypoint_set` 与 `constants.py::WAYPOINT_SET_DEFAULT`；V2 / V1 均保留，加载未声明插值的旧清单仍用原 `segment_smoothstep`，兼容旧行为。
-- 本地 `urdf-viz` 已完整预览 `00→10→20→30→40`，最终 q 回读误差 `1e-7 rad`；CPU 合约测试 6 项通过：
+- 本地 `urdf-viz` 已完整预览 `00→10→20→30→40`，最终 q 回读误差 `1e-7 rad`；CPU 合约测试通过：
 
 ```bash
 python -m unittest tools.test_ces_smooth_pick -v
 ```
 
-- **待办：必须在 Isaac Sim / A10 跑一次实际 Pick**，观察 00→10 是否清抽屉、10→20 大跨越是否碰撞、30 交接 TCP、夹取与反向回臂是否稳定。当前只是 URDF / 数学轨迹 / 加载契约通过。
+- **已在 Isaac Sim 实跑验收：动作完全 OK 且丝滑**（2026-08-21）。清抽屉、10→20 跨越、30 交接、夹取、反向回臂全部正常。唯一不足是太慢 → 见 §10.5。
+
+### 10.5 Pick 提速：`--ces_pick_speed`（2026-08-21）
+
+**原时间账（walk 模式，SETTLE → HOLD 结束 ≈ 18.4 s）：**
+
+| 阶段 | 原时长 | 1.5× 后 |
+|---|---|---|
+| SETTLE + GOTO_PICK | 2.1 s | 2.1 s（不缩放） |
+| UNFOLD `00→10→20→30` | 5.27 s | 3.51 s |
+| DESCEND | 1.1 s | 1.1 s（不缩放） |
+| GRASP | 1.0 s | 1.0 s（不缩放） |
+| LIFT | 2.2 s | 1.47 s |
+| RETURN_HOME 逆序回 00 | 5.82 s | 3.88 s |
+| CARRY + HOLD | 0.9 s | 0.9 s（不缩放） |
+| **合计** | **18.4 s** | **14.0 s** |
+
+两段关节轨迹回放占 60%，所以只压它们就够。各倍率实测账（`seg_s` 为 `00→10/10→20/20→30`）：
+
+| `--ces_pick_speed` | seg_s | UNFOLD | LIFT | RETURN | pick 合计 | 峰值 rad/s |
+|---|---|---|---|---|---|---|
+| 1.0（原速） | 1.75/2.07/1.20 | 5.27 | 2.20 | 5.82 | 18.4 s | 0.89 |
+| **1.5（默认）** | 1.17/1.38/0.80 | 3.51 | 1.47 | 3.88 | **14.0 s** | 1.33 |
+| 2.0 | 0.88/1.03/0.60 | 2.63 | 1.10 | 2.91 | 11.7 s | 1.77 |
+| 3.0（上限） | 0.58/0.69/0.40 | 1.76 | 0.73 | 1.94 | 9.5 s | 2.66 |
+
+**机制**：`scale_segment_times(durations, scale, min_time)`（`manip_common/interpolation.py`）把每段时长除以倍率。**均匀时间缩放不改关节空间曲线**，只把每个速度乘以倍率 —— 所以 URDF-viz 里确认过的姿态、`monotone_cubic_hermite` 的中间点速度连续性、不越界性质全部原样成立。状态机在 `__init__` 里一次性算好 `_joint_segment_times / _lift_time / _wp_lead_in_time / _return_lead_in_time`，轨迹和超时判定共用同一套数，不会出现"超时先于轨迹完成触发"。
+
+**为什么 DESCEND / GRASP 不缩放**：DESCEND 是锁 XY 只落 Z 的 DiffIK 段，压快会让 TCP 跟不上，`_start_grasp` 冻结的实际 Z 就偏高 → 抓空；GRASP 是夹爪闭合的物理时间，和轨迹无关。SETTLE / GOTO_PICK / CARRY / HOLD 是平衡策略的稳定等待，同理不动。
+
+**上限依据**：`_slew_arm` 每步把关节增量截断在 `ARM_SLEW_RAD = 0.080 rad`，控制周期 `dt = 4 × 0.005 = 0.02 s`，所以下发速度天花板是 **4.0 rad/s**。`smooth_v1` 原速峰值 `0.887 rad/s`（见 manifest `validation.max_abs_velocity_rad_s`），即 **4.5× 处轨迹才开始被截断变形**。`PICK_SPEED_MAX = 3.0` 留了余量，另一半原因是件只靠垫面摩擦夹着，LIFT / RETURN_HOME 太快会甩脱。
+
+**调法**：`--ces_pick_speed 2.0` 等。启动日志打印 `arm_speed=x1.50` 和 `seg_s=1.17/1.38/0.80 (authored 1.75/2.07/1.20)`。**如果提速后掉件或抓偏，先降的是这个倍率，不要动路点 q。**
+
+- **待办：1.5× 的物理验收**。重点看 10→20 加速后是否蹭抽屉、LIFT/RETURN_HOME 加速后件是否在垫面上滑动或甩脱、整机平衡是否被更大的手臂摆动扰动。CPU 侧只证明了"曲线形状没变、峰值速度仍在限幅内"。
 
 ### 姿态调优 V2（历史已完成，可回退）
 
