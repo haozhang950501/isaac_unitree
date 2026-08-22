@@ -88,8 +88,9 @@ GRASP_TIME = 1.0
 GRASP_POS_TOL = 0.055
 GRASP_WAIT_MAX = 0.6
 LIFT_TIME = 2.2
-# 抬起后按抓取路点的逆序回到初始臂姿（00），夹着件走路更稳、也不挡视线。
-RETURN_LEAD_IN_TIME = 0.8  # 抬起 q → 30 的过渡段
+# 旧清单回退：抬起后先从实时 q 过渡到第一个逆向路点。smooth_v1 已把同一
+# 0.8 s 写进 manifest 的 40(live)→30 return segment，并最终收到胸前 05。
+RETURN_LEAD_IN_TIME = 0.8
 RETURN_TIME = 2.5  # 无关节路点时：单段回默认臂姿
 CARRY_TIME = 0.6  # 冻臂 q，不要再笛卡尔收臂（件会掉）
 HOLD_TIME = 0.3
@@ -102,7 +103,7 @@ PLACE_RAISE_FORWARD = 0.06  # 抬臂段顺机体前方挪一点，避免死折�
 PLACE_RAISE_TIME = 1.6
 PLACE_REACH_TIME = 2.2
 PLACE_APPROACH_TIME = PLACE_RAISE_TIME + PLACE_REACH_TIME
-# 放置 IK 只跟位置（不给朝向目标），靠下面的窗口把姿态锁在初始臂姿附近：
+# 放置 IK 只跟位置（不给朝向目标），靠下面的窗口把姿态锁在携带臂姿附近：
 # 肩内外旋/肩偏摆贴住初始值 → 肘不外翻；腕三轴几乎不转。
 PLACE_ROLL_WINDOW = 0.45
 PLACE_YAW_WINDOW = 0.50
@@ -110,7 +111,7 @@ PLACE_WRIST_WINDOW = 0.30
 PLACE_ELBOW_MIN = 0.20  # 肘不许伸直锁死
 PLACE_DESCEND_TIME = 0.0  # 跳过：悬停松爪，件自由落下
 RELEASE_TIME = 0.8
-# 收臂：按放置轨迹的逆序（灰筐上方 → 抬臂点 → 初始臂姿），别横扫桌沿。
+# 收臂：按放置轨迹的逆序（灰筐上方 → 抬臂点 → 携带姿态），别横扫桌沿。
 RETRACT_TIME = 1.6
 RETRACT_HOME_TIME = 1.6
 

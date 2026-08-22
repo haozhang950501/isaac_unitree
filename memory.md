@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-21（**Smooth Pick 已在 Isaac Sim 跑通并确认丝滑**；本次加了 pick 提速默认 1.5×、压缩启动等待、修掉 WebRTC 报错。提速待物理验收）
+更新时间：2026-08-22（**Smooth Pick 正向已在 Isaac Sim 跑通并确认丝滑**；逆序回收已改为用户在 URDF-viz 设计的 `40→30→20→10→05` 胸前姿态，代码与 CPU 合约测试已通过，待 Isaac Sim 物理验收）
 
 **下一阶段：优化 place 动作。** 现在放置是 DiffIK + 笛卡尔插补去追世界灰筐中心，手臂为了凑 TCP 会大幅转肩转腕。计划改成用 URDF-viz **写死几个关节姿态点**（复用 pick 的 `ces_pick_smooth_v1` 清单与连续插值机制），关节空间回放，不让 IK 自由发挥。见 §11。
 
@@ -17,19 +17,21 @@
 | **当前主任务** | `Isaac-Move-CES-Product-G129-Dex1-Wholebody` |
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
-**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → 逆序关节回初始右臂 → HOLD 后 `walk` 真实走到放置站 → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。
+**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → `40(live)→30→20→10→05` 收到胸前 → HOLD 后 `walk` 真实走到放置站 → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。
 
 **归档状态（2026-08-19，`pick+walk_done`）**：
 
 - 机器人 **spawn 就在抓取站**（`ROBOT_INIT_POS = PICK_STAND_XY`），启动不再瞬移。
-- 抬起后阶段 `RETURN_HOME`：按抓取路点 **逆序** 回到 00 / 默认右臂，夹爪保持闭合，回臂完成后再 walk。
+- 抬起后阶段 `RETURN_HOME`（枚举名保留）：Smooth v1 按独立回收清单 `40(live)→30→20→10→05_chest_carry` 收到胸前，夹爪保持闭合，到05后再 walk；旧 V1/V2 回退组仍保持逆序回00。
 - **Walk 换站已跑通**：「后退 → 边退边右转（转弧）→ 前进」，固定幅值 + 死区（§6.2）。Isaac Sim 实测后退、右转、走到放置站范围都 OK。
 - **Place 动作仍是 IK + 插补，未优化**：DiffIK 追世界灰筐中心，关节姿态和腕转角很大。下一阶段换成写死的关节路点，见 §11。
 - 纯 CPU 导航测试 26 项已过，含 900 组撞桌扫描（§6.2 末）。
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
-**2026-08-21 Smooth Pick design**：用户在 `urdf_pose_toolkit` 中确认 `00→10→20→30→40` 视觉效果。项目新增 `ces_pick_smooth_v1` 并设为默认；运行时关节硬轨迹只有 `00→10→20→30`，`30→40` 仍只作下降 IK 的动态 `q_ref`。05/25 从新组移除但 V2 文件原样保留；00/10/20/30/40 的 q 与 V2 完全一致。关节插值改为清单可选的 `monotone_cubic_hermite`：中间点速度连续、不整机刹停，起终点停稳，反向 `RETURN_HOME` 同样走连续曲线。**已在 Isaac Sim 实跑确认动作完全 OK 且丝滑。**
+**2026-08-21 Smooth Pick design**：用户在 `urdf_pose_toolkit` 中确认 `00→10→20→30→40` 视觉效果。项目新增 `ces_pick_smooth_v1` 并设为默认；运行时关节硬轨迹只有 `00→10→20→30`，`30→40` 仍只作下降 IK 的动态 `q_ref`。正向 `05_forward_reach/25` 从新组移除但 V2 文件原样保留；00/10/20/30/40 的 q 与 V2 完全一致。关节插值改为清单可选的 `monotone_cubic_hermite`。**正向和当时的回00动作已在 Isaac Sim 实跑确认完全 OK 且丝滑。**
+
+**2026-08-22 逆序回收到胸前**：用户在 `urdf_pose_toolkit` 从10手工设计并保存 `05_chest_carry`，q=`[-0.7999999,-0.24,0.59999996,0.09000012,0.36,-0.13,0.72999984]`。Smooth v1 清单新增独立 `return_path`：逻辑序列 `40→30→20→10→05`，实际不硬下发 authored 40，而以抬起后的实时 q 作为“40阶段”起点，再关节回放到30/20/10/05；10处因全关节换向而平滑停稳后再收向05。旧 V1/V2 无 `return_path` 时仍自动逆序回00。16项 CPU 合约测试通过；新05的夹持、避碰、行走平衡尚未做 Isaac Sim 验收。
 
 **2026-08-21 Pick 提速**：动作没问题但太慢，加 `--ces_pick_speed` 时间缩放，默认 **1.5×**。只除 `UNFOLD(00→30)` / `LIFT` / `RETURN_HOME` 三段关节轨迹的**时长**，路点 q 和曲线形状一字不动（均匀时间缩放 = 同一条曲线、速度整体 ×1.5）。`DESCEND` / `GRASP` 故意不缩放。pick 段 18.4 s → 14.0 s（−24%）。详见 §10.5。
 
@@ -69,7 +71,7 @@ python sim_main.py \
 
 默认 `ces_pick_smooth_v1`；可用 `--ces_waypoint_set ces_pick_natural_v2` 回退到已在 IsaacLab 跑通过的 V2，或用 `ces_pick_natural_v1` 回退旧姿态。旧笛卡尔伸手：去掉 `--ces_use_joint_waypoints`。
 
-`--ces_pick_speed` 是 pick 手臂的时间缩放（默认 1.5，范围 clamp 在 `[0.25, 3.0]`）。它**只除时长、不动路点**，`1.0` 就是原速。启动日志的 `[ces_fsm] drop-place ...` 行会打印 `arm_speed=` 和实际的 `seg_s=`（以及括号里 manifest 原始值），照着调即可。见 §10.5。
+`--ces_pick_speed` 是 pick 手臂的时间缩放（默认 1.5，范围 clamp 在 `[0.25, 3.0]`）。它**只除时长、不动路点**，`1.0` 就是原速。启动日志的 `[ces_fsm] drop-place ...` 行会打印 `arm_speed=`、正向 `seg_s=`、逆向 `return=` / `return_s=`（以及 manifest 原始值），照着调即可。见 §10.5。
 
 Pick 站定位始终用 snap（spawn 就在抓取站），只有夹稳后的 `GOTO_PLACE` 才释放骨盆、调用全身行走策略。
 
@@ -143,7 +145,7 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 ```text
 开关开：SETTLE → GOTO_PICK → UNFOLD(00→30 关节) → DESCEND(锁XY、slerp朝向、落Z、q_ref 30→40) → GRASP
 开关关：SETTLE → GOTO_PICK → UNFOLD → APPROACH → DESCEND → GRASP
-之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → RETURN_HOME(路点逆序回 00) → CARRY/HOLD
+之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → RETURN_HOME(40 live→30→20→10→05胸前) → CARRY/HOLD
         → GOTO_PLACE(walk 三段：后退→转弧→前进，到线停死) → PLACE_APPROACH(抬臂 IK + 插补)
         → RELEASE → RETRACT
 ```
@@ -248,6 +250,7 @@ ARM_SLEW_RAD_LIFT = 0.012           # 仅 carry/hold/goto_place；lift 走规划
 PICK_SPEED_SCALE  = 1.5             # pick 手臂时间缩放默认值，CLI 可覆盖
 PICK_SPEED_MAX    = 3.0             # 上限；4.5× 处才会撞 slew，留了余量
 PICK_SEGMENT_MIN_TIME = 0.40        # 缩放后单段时长下限，防止压成阶跃
+05_chest_carry q = (-0.800,-0.240,+0.600,+0.090,+0.360,-0.130,+0.730)
 ```
 
 ### 5.3 站位
@@ -379,7 +382,7 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
 
 HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 和夹爪闭合，件靠摩擦跟着走。
 
-**站位 / TCP（v2 基线 lift_done 实测，后续 05/10 胸口改过，数量级仍可用）：**
+**站位 / TCP（v2 基线 lift_done 实测；新05接入后的 HOLD TCP 待重跑更新）：**
 
 | 量 | 值 |
 |---|---|
@@ -393,8 +396,8 @@ HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 
 | 来源 | q |
 |---|---|
 | 30 交接实测（HOLD 同族，抬起前） | `[-1.421, -1.254, +1.612, +1.031, +0.289, -0.077, +1.466]` |
-| HOLD / `_carry_arm_q` | 抬起结束冻住：一次 IK（Z+0.08、Y−0.06）后的关节回放终点；腕保持抓取朝向 |
-| 当前 authored 05（伸手，不是 HOLD） | `[-0.55, -0.15, +0.22, +0.90, +0.20, +0.10, +0.35]` |
+| HOLD / `_carry_arm_q`（当前 Smooth v1） | `05_chest_carry = [-0.800, -0.240, +0.600, +0.090, +0.360, -0.130, +0.730]` |
+| V2 authored 05（历史伸手路点，不是当前 HOLD 05） | `[-0.55, -0.15, +0.22, +0.90, +0.20, +0.10, +0.35]` |
 | 当前 authored 10 | `[-0.70, -0.22, +0.38, +0.75, +0.32, -0.05, +0.55]` |
 
 下次跑通 HOLD 时看日志：`[ces_fsm] HOLD tcp_w=... tcp_b=... q=[...]`，用新数替换上表。
@@ -473,20 +476,21 @@ unitree_sim_isaaclab/
 
 运行时 30 后**锁 XY、只落 Z**，朝向 2 s slerp 到产品夹持姿态；40 只作 `q_ref`。
 
-### 当前默认：Smooth Pick v1（2026-08-21）
+### 当前默认：Smooth Pick v1（2026-08-22）
 
 - 姿态目录：`action_provider/ces_grasp/poses/ces_pick_smooth_v1/`。
-- q 保持 V2 已验证的 `00/10/20/30/40` 不变，只去掉冗余 `05/25`。
+- 正向 q 保持 V2 已验证的 `00/10/20/30/40` 不变，正向只去掉冗余 `05_forward_reach/25`；另新增用户手工设计的逆向终点 `05_chest_carry`。
 - 运行时硬下发：`00→10→20→30`；时长 `1.75 / 2.07 / 1.20 s`。`30→40` 的 `1.20 s` 仍是动态 `q_ref` 参考，不把 40 当 `arm_q`。
-- `trajectory_manifest.json::interpolation.method = monotone_cubic_hermite`。单调三次 Hermite 保证关节不越过相邻路点范围，速度在 10/20 连续；只有 00/30 停稳。`RETURN_HOME` 加 `0.8 s` lift→30 过渡后按 `30→20→10→00` 反向连续回放。
+- `trajectory_manifest.json::return_path`：逻辑 `40→30→20→10→05`；40使用抬起后的实时 q，不硬下发 q_ref 文件。原始时长 `0.8 / 1.2 / 2.07 / 1.75 s`，默认1.5×后 `0.53 / 0.80 / 1.38 / 1.17 s`。单调三次 Hermite 在20连续通过，在10因全关节换向平滑停稳，再收到05。
+- `pose_library.py` 优先读取独立 `return_path`；旧 V1/V2 没有该字段时，兼容回退为“实时 q→正向路点逆序→00”。
 - 默认已同时改到 `sim_main.py --ces_waypoint_set` 与 `constants.py::WAYPOINT_SET_DEFAULT`；V2 / V1 均保留，加载未声明插值的旧清单仍用原 `segment_smoothstep`，兼容旧行为。
-- 本地 `urdf-viz` 已完整预览 `00→10→20→30→40`，最终 q 回读误差 `1e-7 rad`；CPU 合约测试通过：
+- 本地 `urdf-viz` 已完整预览正向 `00→10→20→30→40`，并由用户完成逆向 `30→20→10→05` 设计；16项 CPU 合约测试通过：
 
 ```bash
 python -m unittest tools.test_ces_smooth_pick -v
 ```
 
-- **已在 Isaac Sim 实跑验收：动作完全 OK 且丝滑**（2026-08-21）。清抽屉、10→20 跨越、30 交接、夹取、反向回臂全部正常。唯一不足是太慢 → 见 §10.5。
+- **Isaac Sim 验收边界**：2026-08-21 已验的是正向和旧的逆序回00；2026-08-22 新增的胸前05只完成 URDF-viz 设计、清单/代码接入和CPU测试，尚未证明夹持不掉、退出抽屉不碰撞或walk平衡稳定。
 
 ### 10.5 Pick 提速：`--ces_pick_speed`（2026-08-21）
 
@@ -499,7 +503,7 @@ python -m unittest tools.test_ces_smooth_pick -v
 | DESCEND | 1.1 s | 1.1 s（不缩放） |
 | GRASP | 1.0 s | 1.0 s（不缩放） |
 | LIFT | 2.2 s | 1.47 s |
-| RETURN_HOME 逆序回 00 | 5.82 s | 3.88 s |
+| RETURN_HOME `40(live)→30→20→10→05` | 5.82 s | 3.88 s |
 | CARRY + HOLD | 0.9 s | 0.9 s（不缩放） |
 | **合计** | **18.4 s** | **14.0 s** |
 
@@ -507,20 +511,20 @@ python -m unittest tools.test_ces_smooth_pick -v
 
 | `--ces_pick_speed` | seg_s | UNFOLD | LIFT | RETURN | pick 合计 | 峰值 rad/s |
 |---|---|---|---|---|---|---|
-| 1.0（原速） | 1.75/2.07/1.20 | 5.27 | 2.20 | 5.82 | 18.4 s | 0.89 |
-| **1.5（默认）** | 1.17/1.38/0.80 | 3.51 | 1.47 | 3.88 | **14.0 s** | 1.33 |
-| 2.0 | 0.88/1.03/0.60 | 2.63 | 1.10 | 2.91 | 11.7 s | 1.77 |
-| 3.0（上限） | 0.58/0.69/0.40 | 1.76 | 0.73 | 1.94 | 9.5 s | 2.66 |
+| 1.0（原速） | 1.75/2.07/1.20 | 5.27 | 2.20 | 5.82 | 18.4 s | 0.90 |
+| **1.5（默认）** | 1.17/1.38/0.80 | 3.51 | 1.47 | 3.88 | **14.0 s** | 1.35 |
+| 2.0 | 0.88/1.03/0.60 | 2.63 | 1.10 | 2.91 | 11.7 s | 1.80 |
+| 3.0（上限） | 0.58/0.69/0.40 | 1.76 | 0.73 | 1.94 | 9.5 s | 2.69 |
 
-**机制**：`scale_segment_times(durations, scale, min_time)`（`manip_common/interpolation.py`）把每段时长除以倍率。**均匀时间缩放不改关节空间曲线**，只把每个速度乘以倍率 —— 所以 URDF-viz 里确认过的姿态、`monotone_cubic_hermite` 的中间点速度连续性、不越界性质全部原样成立。状态机在 `__init__` 里一次性算好 `_joint_segment_times / _lift_time / _wp_lead_in_time / _return_lead_in_time`，轨迹和超时判定共用同一套数，不会出现"超时先于轨迹完成触发"。
+**机制**：`scale_segment_times(durations, scale, min_time)`（`manip_common/interpolation.py`）把每段时长除以倍率。**均匀时间缩放不改关节空间曲线**，只把每个速度乘以倍率 —— 所以 URDF-viz 里确认过的姿态、`monotone_cubic_hermite` 的连续性、不越界性质全部原样成立。状态机在 `__init__` 里一次性算好 `_joint_segment_times / _return_segment_times / _lift_time / _wp_lead_in_time`，轨迹和超时判定共用同一套数，不会出现"超时先于轨迹完成触发"。
 
 **为什么 DESCEND / GRASP 不缩放**：DESCEND 是锁 XY 只落 Z 的 DiffIK 段，压快会让 TCP 跟不上，`_start_grasp` 冻结的实际 Z 就偏高 → 抓空；GRASP 是夹爪闭合的物理时间，和轨迹无关。SETTLE / GOTO_PICK / CARRY / HOLD 是平衡策略的稳定等待，同理不动。
 
-**上限依据**：`_slew_arm` 每步把关节增量截断在 `ARM_SLEW_RAD = 0.080 rad`，控制周期 `dt = 4 × 0.005 = 0.02 s`，所以下发速度天花板是 **4.0 rad/s**。`smooth_v1` 原速峰值 `0.887 rad/s`（见 manifest `validation.max_abs_velocity_rad_s`），即 **4.5× 处轨迹才开始被截断变形**。`PICK_SPEED_MAX = 3.0` 留了余量，另一半原因是件只靠垫面摩擦夹着，LIFT / RETURN_HOME 太快会甩脱。
+**上限依据**：`_slew_arm` 每步把关节增量截断在 `ARM_SLEW_RAD = 0.080 rad`，控制周期 `dt = 4 × 0.005 = 0.02 s`，所以下发速度天花板是 **4.0 rad/s**。加入05后 `smooth_v1` 正/逆原速总峰值 `0.898 rad/s`（正向0.887、逆向0.898），约 **4.45× 处轨迹才开始被截断变形**。`PICK_SPEED_MAX = 3.0` 留了余量，另一半原因是件只靠垫面摩擦夹着，LIFT / RETURN_HOME 太快会甩脱。
 
 **调法**：`--ces_pick_speed 2.0` 等。启动日志打印 `arm_speed=x1.50` 和 `seg_s=1.17/1.38/0.80 (authored 1.75/2.07/1.20)`。**如果提速后掉件或抓偏，先降的是这个倍率，不要动路点 q。**
 
-- **待办：1.5× 的物理验收**。重点看 10→20 加速后是否蹭抽屉、LIFT/RETURN_HOME 加速后件是否在垫面上滑动或甩脱、整机平衡是否被更大的手臂摆动扰动。CPU 侧只证明了"曲线形状没变、峰值速度仍在限幅内"。
+- **待办：1.5× + 新05 的物理验收**。重点看10→20是否蹭抽屉、40(live)→30是否跳变、10停稳后收到05时产品是否碰胸/滑动、walk时胸前持物是否扰动平衡。CPU 侧只证明了“清单正确、曲线不越界、峰值速度仍在限幅内”。
 
 ### 姿态调优 V2（历史已完成，可回退）
 
