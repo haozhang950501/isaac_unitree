@@ -3,13 +3,15 @@
 """CES LoadingLine 取放状态机。
 
 路点开：SETTLE → GOTO_PICK → UNFOLD(00→30) → DESCEND(锁XY、只落Z、40 仅 q_ref)
-→ GRASP → LIFT → RETURN_HOME(逆序回 00) → CARRY/HOLD
+→ GRASP → LIFT → RETURN_HOME(40阶段实时q→30→20→10→05胸前) → CARRY/HOLD
 → RAISE_FOR_PLACE(snap 时在抓取站抬臂) → GOTO_PLACE(snap/walk)
-→ PLACE_APPROACH(抬臂再前伸) → RELEASE → RETRACT(逆序回 00)。
+→ PLACE_APPROACH(抬臂再前伸) → RELEASE → RETRACT(逆序回胸前05)。
 
 机器人 spawn 就在抓取站，SETTLE/GOTO_PICK 只是把骨盆钉在原地，不瞬移。
 
-夹住抬起后按抓取路点的逆序回到初始右臂姿态，件夹在手里；到位后才开始后退。
+夹住抬起后沿独立回收路点收到胸前05，件夹在手里；到位后才开始后退。
+40 在正向下降中仍只作动态 q_ref；逆向的“40”表示抬起后的实时关节姿态，
+不会把 authored 40 突然作为 arm_q 硬下发。
 `--station_mode walk` 的 GOTO_PLACE 走 `CARRY_WALK_LEGS`：先后退到与灰色托盘
 对齐（目标点收了 `WALK_BACKOFF_TRIM`，宁可退不够），再原地右转正对桌子，最后
 正向走进放置站。
@@ -119,14 +121,20 @@ class CesPickPlaceStateMachine:
             self._waypoints = load_waypoint_set(waypoint_set or C.WAYPOINT_SET_DEFAULT)
         self.speed_scale = C.clamp_pick_speed(speed_scale)
         self._joint_segment_times: tuple[float, ...] = ()
+        self._return_segment_times: tuple[float, ...] = ()
         if self._waypoints is not None:
             self._joint_segment_times = tuple(
                 self._scaled(
                     self._waypoints.joint_segment_durations, C.PICK_SEGMENT_MIN_TIME
                 )
             )
+            self._return_segment_times = tuple(
+                self._scaled(
+                    self._waypoints.return_segment_durations,
+                    C.PICK_SEGMENT_MIN_TIME,
+                )
+            )
         self._wp_lead_in_time = self._scaled([C.WAYPOINT_LEAD_IN_TIME])[0]
-        self._return_lead_in_time = self._scaled([C.RETURN_LEAD_IN_TIME])[0]
         self._return_time = self._scaled([C.RETURN_TIME], C.PICK_SEGMENT_MIN_TIME)[0]
         self._lift_time = self._scaled([C.LIFT_TIME], C.PICK_SEGMENT_MIN_TIME)[0]
         self.phase = CesPickPlacePhase.SETTLE
@@ -169,7 +177,10 @@ class CesPickPlaceStateMachine:
                 f"interp={self._waypoints.interpolation_method} "
                 f"seg_s={'/'.join(f'{d:.2f}' for d in self._joint_segment_times)} "
                 f"(authored "
-                f"{'/'.join(f'{d:.2f}' for d in self._waypoints.joint_segment_durations)})"
+                f"{'/'.join(f'{d:.2f}' for d in self._waypoints.joint_segment_durations)}) "
+                f"return={self._waypoints.return_start}(live)→"
+                f"{'→'.join(self._waypoints.return_waypoints)} "
+                f"return_s={'/'.join(f'{d:.2f}' for d in self._return_segment_times)}"
             )
         print(
             f"[ces_fsm] drop-place station_mode={self.station_mode} stop_after={self.stop_after} "
@@ -177,7 +188,7 @@ class CesPickPlaceStateMachine:
             f"place_stand=({C.PLACE_STAND_XY[0]:.3f},{C.PLACE_STAND_XY[1]:.3f}) "
             f"x_b_place={C.X_B_PLACE:.2f} "
             f"(spawn on pick stand; place {self.station_mode}; Dex1 friction grasp; "
-            f"arm returns to the start posture before carrying)"
+            f"arm returns to the manifest carry posture before walking)"
             f"{extra}"
         )
 
@@ -616,20 +627,19 @@ class CesPickPlaceStateMachine:
         )
 
     def _begin_return_home(self):
-        """抬起后按抓取路点的逆序回到初始臂姿，件夹在手里一起回来。
+        """抬起后沿清单回收到胸前姿态，件夹在手里一起回来。
 
-        逆序走原路，出上料口的间隙和进去时一样；到位后才开始后退，
-        走路时右臂就是初始姿态。
+        正向 40 是动态 q_ref，不能作为 arm_q 硬下发。因此逆向逻辑序列虽记为
+        40→30→20→10→05，实际第一点用抬起后的实时 q（40 阶段），再连续回放
+        30→20→10→05。这样既保留退出上料口的原路间隙，也避免 q 突跳。
         """
         q_now = self.ctx.get_right_arm_q()[0].clone()
         if self._waypoints is not None:
-            names = list(reversed(self._waypoints.joint_waypoints))
+            names = list(self._waypoints.return_waypoints)
             qs = [q_now] + [self._pose_q(name) for name in names]
-            durations = [self._return_lead_in_time] + list(
-                reversed(self._joint_segment_times)
-            )
+            durations = list(self._return_segment_times)
             interpolation_method = self._waypoints.interpolation_method
-            path = "→".join(names)
+            path = f"{self._waypoints.return_start}(live)→{'→'.join(names)}"
         else:
             qs = [q_now, self._home_arm_q()]
             durations = [self._return_time]
@@ -637,7 +647,7 @@ class CesPickPlaceStateMachine:
             path = "default_arm"
         self.joint_interp.reset_path(qs, durations, method=interpolation_method)
         print(
-            f"[ces_fsm] return arm home (reverse) {path} "
+            f"[ces_fsm] return arm to carry posture {path} "
             f"dur={sum(durations):.2f}s interp={interpolation_method} "
             f"(gripper stays closed)"
         )
@@ -651,7 +661,7 @@ class CesPickPlaceStateMachine:
     def _place_joint_window(self, q_home: torch.Tensor):
         """放置 IK 的关节窗口：肘不外翻、腕几乎不转。
 
-        肩内外旋 / 肩偏摆贴住初始臂姿，抬臂靠肩俯仰 + 肘完成；腕三轴锁在
+        肩内外旋 / 肩偏摆贴住携带臂姿，抬臂靠肩俯仰 + 肘完成；腕三轴锁在
         初始值附近，所以位置 IK 只能用自然的前摆解，解不出鸡翅膀姿态。
         """
         ik = self.ctx.ik
@@ -681,7 +691,7 @@ class CesPickPlaceStateMachine:
             self._log_tcp("place_raise")
 
     def _begin_retract(self):
-        """按放置轨迹的逆序收臂：灰筐上方 → 抬臂点 → 初始臂姿。"""
+        """按放置轨迹的逆序收臂：灰筐上方 → 抬臂点 → 胸前携带姿态。"""
         q_now = self.ctx.get_right_arm_q()[0].clone()
         home = self._carry_arm_q if self._carry_arm_q is not None else self._home_arm_q()
         qs, durations, names = [q_now], [], []
@@ -691,7 +701,7 @@ class CesPickPlaceStateMachine:
             names.append("raise")
         qs.append(home)
         durations.append(C.RETRACT_HOME_TIME)
-        names.append("home")
+        names.append("carry")
         self._place_arm_q = home.clone()
         self.joint_interp.reset_path(qs, durations)
         print(
@@ -902,7 +912,7 @@ class CesPickPlaceStateMachine:
         )
 
     def _begin_place_approach(self):
-        """初始臂姿 → 抬到放置高度 → 水平伸到灰筐上方。
+        """胸前携带姿态 → 抬到放置高度 → 水平伸到灰筐上方。
 
         两段笛卡尔路径：① 贴身抬臂（只往前挪一点点，避免死折肘）先升到放置
         高度，桌沿和灰筐沿都在手下方；② 保持这个高度水平伸过去。所以件永远
@@ -942,7 +952,7 @@ class CesPickPlaceStateMachine:
         self._log_tcp("place_start")
 
     def _q_ref_for_place(self) -> torch.Tensor | None:
-        """放置 IK 的零空间提示：初始臂姿，零空间把肘拉回体侧。"""
+        """放置 IK 的零空间提示：胸前携带姿态，零空间把肘拉回体侧。"""
         return self._carry_arm_q
 
     def _q_ref_for_descend(self) -> torch.Tensor | None:
@@ -1141,7 +1151,7 @@ class CesPickPlaceStateMachine:
             if self.joint_interp.finished or self.t > self.joint_interp.duration + 1.0:
                 self._carry_arm_q = q.clone()
                 print(
-                    f"[ces_fsm] arm back at start posture q={self._fmt_q(q)} "
+                    f"[ces_fsm] arm at carry posture q={self._fmt_q(q)} "
                     f"(carry the product there)"
                 )
                 self._log_tcp("home_done")
@@ -1351,7 +1361,7 @@ class CesPickPlaceStateMachine:
                 q = self._frozen_place_arm()
             if self.joint_interp.finished or self.t > self.joint_interp.duration + 1.0:
                 self._place_arm_q = q.clone()
-                print("[ces_fsm] arm back at start posture — task done")
+                print("[ces_fsm] arm back at carry posture — task done")
                 self._log_place_result("task_done")
                 self._transition(CesPickPlacePhase.DONE)
             pin_xy, pin_yaw = self._place_pin_pose()

@@ -28,6 +28,9 @@ class CesWaypointSet:
     q_ref_from: str
     q_ref_to: str
     q_ref_duration: float
+    return_start: str
+    return_waypoints: tuple[str, ...]
+    return_segment_durations: tuple[float, ...]
     interpolation_method: str
 
 
@@ -101,11 +104,73 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
             q_ref_to = dst
             q_ref_duration = dur
 
+    return_spec = manifest.get("return_path")
+    if return_spec is not None:
+        if not isinstance(return_spec, dict):
+            raise ValueError(f"waypoint set {set_name} return_path must be an object")
+        logical_return = tuple(
+            str(value) for value in return_spec.get("logical_waypoints", [])
+        )
+        return_waypoints = tuple(
+            str(value) for value in return_spec.get("commanded_waypoints", [])
+        )
+        if len(logical_return) < 2 or logical_return[1:] != return_waypoints:
+            raise ValueError(
+                f"waypoint set {set_name} return_path must be "
+                "logical_start + commanded_waypoints"
+            )
+        return_start = logical_return[0]
+        return_durations: list[float] = []
+        expected_src = return_start
+        return_segments = list(return_spec.get("segments", []))
+        if len(return_segments) != len(return_waypoints):
+            raise ValueError(
+                f"waypoint set {set_name} return_path has {len(return_segments)} "
+                f"segments for {len(return_waypoints)} commanded waypoints"
+            )
+        for index, segment in enumerate(return_segments):
+            src = str(segment["from"])
+            dst = str(segment["to"])
+            duration = float(segment["duration_s"])
+            if src != expected_src or dst != return_waypoints[index]:
+                raise ValueError(
+                    f"return segment {src}->{dst} does not match expected "
+                    f"{expected_src}->{return_waypoints[index]}"
+                )
+            if duration <= 0.0:
+                raise ValueError(f"return segment {src}->{dst} duration must be positive")
+            return_durations.append(duration)
+            expected_src = dst
+    else:
+        # Compatibility for natural_v1/v2 manifests: keep the historical
+        # live-post-lift lead-in followed by the reversed forward path to 00.
+        return_start = q_ref_to
+        return_waypoints = tuple(reversed(joint_waypoints))
+        return_durations = [
+            float(C.RETURN_LEAD_IN_TIME),
+            *reversed(joint_durations),
+        ]
+
     if handoff and joint_waypoints and joint_waypoints[-1] != handoff:
         raise ValueError(
             f"joint-space path ends at {joint_waypoints[-1]}, expected handoff {handoff}"
         )
-    missing_wp = [n for n in joint_waypoints + [q_ref_from, q_ref_to] if n and n not in q_by_name]
+    if return_start and q_ref_to and return_start != q_ref_to:
+        raise ValueError(
+            f"waypoint set {set_name} return starts at {return_start}, "
+            f"expected q_ref phase {q_ref_to}"
+        )
+    missing_wp = [
+        n
+        for n in [
+            *joint_waypoints,
+            q_ref_from,
+            q_ref_to,
+            return_start,
+            *return_waypoints,
+        ]
+        if n and n not in q_by_name
+    ]
     if missing_wp:
         raise ValueError(f"waypoint set {set_name} missing poses {missing_wp}")
     if len(joint_waypoints) < 2 or not joint_durations:
@@ -122,5 +187,8 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
         q_ref_from=q_ref_from,
         q_ref_to=q_ref_to,
         q_ref_duration=q_ref_duration,
+        return_start=return_start,
+        return_waypoints=tuple(return_waypoints),
+        return_segment_durations=tuple(return_durations),
         interpolation_method=interpolation_method,
     )

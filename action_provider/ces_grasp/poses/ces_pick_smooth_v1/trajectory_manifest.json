@@ -17,7 +17,8 @@
     "10_forward_lift_retract.json",
     "20_right_shift_wrist_down.json",
     "30_pre_grasp_vertical.json",
-    "40_grasp_posture_ref.json"
+    "40_grasp_posture_ref.json",
+    "05_chest_carry.json"
   ],
   "preview_pose_files": [
     "00_ready.json",
@@ -77,6 +78,50 @@
     ],
     "q_ref_wrist_policy": "copy_from_30_exactly"
   },
+  "return_path": {
+    "logical_waypoints": [
+      "40_grasp_posture_ref",
+      "30_pre_grasp_vertical",
+      "20_right_shift_wrist_down",
+      "10_forward_lift_retract",
+      "05_chest_carry"
+    ],
+    "commanded_waypoints": [
+      "30_pre_grasp_vertical",
+      "20_right_shift_wrist_down",
+      "10_forward_lift_retract",
+      "05_chest_carry"
+    ],
+    "start_policy": "use_live_post_lift_q_as_40_phase; never hard-command authored q_ref pose 40",
+    "segments": [
+      {
+        "from": "40_grasp_posture_ref",
+        "to": "30_pre_grasp_vertical",
+        "duration_s": 0.8,
+        "runtime_control": "live_joint_space_lead_in"
+      },
+      {
+        "from": "30_pre_grasp_vertical",
+        "to": "20_right_shift_wrist_down",
+        "duration_s": 1.2,
+        "runtime_control": "joint_space"
+      },
+      {
+        "from": "20_right_shift_wrist_down",
+        "to": "10_forward_lift_retract",
+        "duration_s": 2.07,
+        "runtime_control": "joint_space"
+      },
+      {
+        "from": "10_forward_lift_retract",
+        "to": "05_chest_carry",
+        "duration_s": 1.75,
+        "runtime_control": "joint_space"
+      }
+    ],
+    "interpolation": "monotone_cubic_hermite",
+    "final_role": "carry_posture"
+  },
   "planning": {
     "removed_as_redundant": [
       "05_forward_reach",
@@ -101,16 +146,42 @@
       0.563947888,
       0.373612158
     ],
+    "forward_max_abs_velocity_rad_s": 0.88722353,
+    "return_path": {
+      "validation_passed": true,
+      "violations": [],
+      "commanded_waypoints": [
+        "30_pre_grasp_vertical",
+        "20_right_shift_wrist_down",
+        "10_forward_lift_retract",
+        "05_chest_carry"
+      ],
+      "interior_speed_norm_rad_s": [
+        0.373612158,
+        0.0
+      ],
+      "pose_10_is_smooth_reversal_rest": true,
+      "max_abs_velocity_by_joint_rad_s": [
+        0.388049042,
+        0.897826087,
+        0.67713982,
+        0.60034,
+        0.545319062,
+        0.068571429,
+        0.756966944
+      ],
+      "max_abs_velocity_rad_s": 0.897826087
+    },
     "max_abs_velocity_by_joint_rad_s": [
       0.818569837,
-      0.88722353,
-      0.595537955,
+      0.897826087,
+      0.67713982,
       0.60034,
       0.545319062,
-      0.057605712,
-      0.756958979
+      0.068571429,
+      0.756966944
     ],
-    "max_abs_velocity_rad_s": 0.88722353,
+    "max_abs_velocity_rad_s": 0.897826087,
     "min_joint_limit_margin_rad": 0.148629358
   },
   "generated_at": "2026-08-21T12:39:17+08:00"
