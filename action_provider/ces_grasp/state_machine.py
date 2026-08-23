@@ -3,7 +3,7 @@
 """CES LoadingLine 取放状态机。
 
 路点开：SETTLE → GOTO_PICK → UNFOLD(00→30) → DESCEND(锁XY、只落Z、40 仅 q_ref)
-→ GRASP → LIFT → RETURN_HOME(40阶段实时q→30→20→10→05胸前) → CARRY/HOLD
+→ GRASP → LIFT → RETURN_HOME(40阶段实时q→30→05胸前) → CARRY/HOLD
 → RAISE_FOR_PLACE(snap 时在抓取站抬臂) → GOTO_PLACE(snap/walk)
 → PLACE_APPROACH(抬臂再前伸) → RELEASE → RETRACT(逆序回胸前05)。
 
@@ -180,7 +180,8 @@ class CesPickPlaceStateMachine:
                 f"{'/'.join(f'{d:.2f}' for d in self._waypoints.joint_segment_durations)}) "
                 f"return={self._waypoints.return_start}(live)→"
                 f"{'→'.join(self._waypoints.return_waypoints)} "
-                f"return_s={'/'.join(f'{d:.2f}' for d in self._return_segment_times)}"
+                f"return_s={'/'.join(f'{d:.2f}' for d in self._return_segment_times)} "
+                f"return_interp={self._waypoints.return_interpolation_method}"
             )
         print(
             f"[ces_fsm] drop-place station_mode={self.station_mode} stop_after={self.stop_after} "
@@ -629,16 +630,16 @@ class CesPickPlaceStateMachine:
     def _begin_return_home(self):
         """抬起后沿清单回收到胸前姿态，件夹在手里一起回来。
 
-        正向 40 是动态 q_ref，不能作为 arm_q 硬下发。因此逆向逻辑序列虽记为
-        40→30→20→10→05，实际第一点用抬起后的实时 q（40 阶段），再连续回放
-        30→20→10→05。这样既保留退出上料口的原路间隙，也避免 q 突跳。
+        正向 40 是动态 q_ref，不能作为 arm_q 硬下发。因此逆向逻辑序列记为
+        40→30→05：实际第一点用抬起后的实时 q（40 阶段），平滑回到30并停稳，
+        再按用户确认的直达轨迹从30收到05。这样不会硬下发 authored 40。
         """
         q_now = self.ctx.get_right_arm_q()[0].clone()
         if self._waypoints is not None:
             names = list(self._waypoints.return_waypoints)
             qs = [q_now] + [self._pose_q(name) for name in names]
             durations = list(self._return_segment_times)
-            interpolation_method = self._waypoints.interpolation_method
+            interpolation_method = self._waypoints.return_interpolation_method
             path = f"{self._waypoints.return_start}(live)→{'→'.join(names)}"
         else:
             qs = [q_now, self._home_arm_q()]

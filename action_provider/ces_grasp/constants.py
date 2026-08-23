@@ -89,7 +89,7 @@ GRASP_POS_TOL = 0.055
 GRASP_WAIT_MAX = 0.6
 LIFT_TIME = 2.2
 # 旧清单回退：抬起后先从实时 q 过渡到第一个逆向路点。smooth_v1 已把同一
-# 0.8 s 写进 manifest 的 40(live)→30 return segment，并最终收到胸前 05。
+# 0.8 s 写进 manifest 的 40(live)→30 return segment，随后从30直达胸前05。
 RETURN_LEAD_IN_TIME = 0.8
 RETURN_TIME = 2.5  # 无关节路点时：单段回默认臂姿
 CARRY_TIME = 0.6  # 冻臂 q，不要再笛卡尔收臂（件会掉）

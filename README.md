@@ -212,6 +212,39 @@ python sim_main.py --device cpu  --enable_cameras  --task  Isaac-PickPlace-Cylin
 **Note 2:** The Isaac Sim WebRTC Streaming Client is a tool provided by NVIDIA Isaac Sim for viewing the Sim window remotely. For installation and usage details, please refer to the 
 [official documentation](https://docs.isaacsim.omniverse.nvidia.com/6.0.0/installation/manual_livestream_clients.html)
 
+#### CES LoadingLine Automatic Pick and Place
+
+The CES whole-body task can run the complete Dex1 pick, carry-walk, and place
+state machine with the approved joint-space Pick trajectory:
+
+```bash
+python sim_main.py \
+  --device cuda:0 \
+  --enable_cameras \
+  --task Isaac-Move-CES-Product-G129-Dex1-Wholebody \
+  --robot_type g129 \
+  --enable_dex1_dds \
+  --auto_ces_pick_place \
+  --station_mode walk \
+  --ces_use_joint_waypoints \
+  --ces_waypoint_set ces_pick_smooth_v1 \
+  --ces_pick_speed 1.5
+```
+
+`ces_pick_smooth_v1` commands the forward joint path
+`00 -> 10 -> 20 -> 30`. Pose 40 remains a dynamic null-space reference for
+the Cartesian grasp descent and is never hard-commanded as an arm pose. After
+lifting, the reverse return uses the live post-lift joint state as phase 40,
+settles at pose 30, then moves directly to the user-authored pose 05 in front
+of the chest: `40(live) -> 30 -> 05`. At the default `1.5` speed scale, the
+authored 3-second `30 -> 05` leg plays in 2 seconds. The older
+`ces_pick_natural_v1` and `ces_pick_natural_v2` sets retain their compatible
+return-to-00 behavior.
+
+The direct return has been approved in the local URDF preview and covered by
+CPU contract tests. Product clearance, grip friction, and walking balance must
+still be accepted in Isaac Sim.
+
 #### 2.4.3 Data Replay
 
 ```

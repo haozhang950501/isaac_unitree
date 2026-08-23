@@ -31,6 +31,7 @@ class CesWaypointSet:
     return_start: str
     return_waypoints: tuple[str, ...]
     return_segment_durations: tuple[float, ...]
+    return_interpolation_method: str
     interpolation_method: str
 
 
@@ -105,9 +106,18 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
             q_ref_duration = dur
 
     return_spec = manifest.get("return_path")
+    return_interpolation_method = interpolation_method
     if return_spec is not None:
         if not isinstance(return_spec, dict):
             raise ValueError(f"waypoint set {set_name} return_path must be an object")
+        return_interpolation_method = str(
+            return_spec.get("interpolation", interpolation_method)
+        )
+        if return_interpolation_method not in _INTERPOLATION_METHODS:
+            raise ValueError(
+                f"waypoint set {set_name} return_path uses unsupported interpolation "
+                f"{return_interpolation_method!r}"
+            )
         logical_return = tuple(
             str(value) for value in return_spec.get("logical_waypoints", [])
         )
@@ -190,5 +200,6 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
         return_start=return_start,
         return_waypoints=tuple(return_waypoints),
         return_segment_durations=tuple(return_durations),
+        return_interpolation_method=return_interpolation_method,
         interpolation_method=interpolation_method,
     )

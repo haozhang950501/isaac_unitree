@@ -34,8 +34,6 @@ Q_REF_POSE = "40_grasp_posture_ref"
 RETURN_POSE = "05_chest_carry"
 RETURN_COMMANDED_POSES = [
     "30_pre_grasp_vertical",
-    "20_right_shift_wrist_down",
-    "10_forward_lift_retract",
     RETURN_POSE,
 ]
 
@@ -106,12 +104,14 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertIn("never hard-command", return_path["start_policy"])
         self.assertEqual(
             [float(segment["duration_s"]) for segment in return_path["segments"]],
-            [0.8, 1.2, 2.07, 1.75],
+            [0.8, 3.0],
         )
+        self.assertEqual(return_path["interpolation"], "segment_smoothstep")
         return_validation = manifest["validation"]["return_path"]
         self.assertTrue(return_validation["validation_passed"])
-        self.assertTrue(return_validation["pose_10_is_smooth_reversal_rest"])
-        self.assertLess(return_validation["max_abs_velocity_rad_s"], 1.0)
+        self.assertTrue(return_validation["pose_30_is_direct_retraction_rest"])
+        self.assertTrue(return_validation["direct_30_to_05"])
+        self.assertLess(return_validation["max_abs_velocity_rad_s"], 1.1)
 
     def test_selected_waypoint_q_values_match_natural_v2(self):
         for name in [*JOINT_POSES, Q_REF_POSE]:
@@ -161,7 +161,10 @@ class SmoothPickManifestTests(unittest.TestCase):
             waypoint_set.return_waypoints, tuple(RETURN_COMMANDED_POSES)
         )
         self.assertEqual(
-            waypoint_set.return_segment_durations, (0.8, 1.2, 2.07, 1.75)
+            waypoint_set.return_segment_durations, (0.8, 3.0)
+        )
+        self.assertEqual(
+            waypoint_set.return_interpolation_method, "segment_smoothstep"
         )
         self.assertEqual(
             waypoint_set.interpolation_method, "monotone_cubic_hermite"
@@ -173,9 +176,15 @@ class SmoothPickManifestTests(unittest.TestCase):
             tuple(reversed(natural_v2.joint_waypoints)),
         )
         self.assertEqual(natural_v2.return_start, natural_v2.q_ref_to)
+        self.assertEqual(
+            natural_v2.return_interpolation_method,
+            natural_v2.interpolation_method,
+        )
 
 
 class SmoothJointInterpolatorTests(unittest.TestCase):
+    INTERPOLATION_METHOD = "monotone_cubic_hermite"
+
     @classmethod
     def setUpClass(cls):
         cls.module = load_interpolation_module()
@@ -194,7 +203,7 @@ class SmoothJointInterpolatorTests(unittest.TestCase):
         interpolator.reset_path(
             self.qs,
             self.durations,
-            method="monotone_cubic_hermite",
+            method=self.INTERPOLATION_METHOD,
         )
         return interpolator
 
@@ -231,7 +240,9 @@ class SmoothJointInterpolatorTests(unittest.TestCase):
 
 
 class SmoothReturnInterpolatorTests(SmoothJointInterpolatorTests):
-    """The authored 30->20->10->05 return must stay smooth and bounded."""
+    """The authored direct 30->05 return must stay smooth and bounded."""
+
+    INTERPOLATION_METHOD = "segment_smoothstep"
 
     @classmethod
     def setUpClass(cls):
@@ -248,25 +259,31 @@ class SmoothReturnInterpolatorTests(SmoothJointInterpolatorTests):
         ]
 
     def test_interior_velocity_is_continuous_and_nonzero(self):
-        """20 passes continuously; 10 rests smoothly before reversing to 05."""
+        """The direct segment rests at 30 and 05 while moving between them."""
         interpolator = self.make_interpolator()
         epsilon = 1e-4
-        speed_norms = []
-        for bound in interpolator.bounds[:-1]:
-            at = self.sample(interpolator, bound)
-            left = (at - self.sample(interpolator, bound - epsilon)) / epsilon
-            right = (self.sample(interpolator, bound + epsilon) - at) / epsilon
-            np.testing.assert_allclose(left, right, atol=5e-4)
-            speed_norms.append(float(np.linalg.norm(left)))
-        self.assertGreater(speed_norms[0], 0.05)
-        self.assertLess(speed_norms[1], 0.01)
+        start_rate = (
+            self.sample(interpolator, epsilon) - self.sample(interpolator, 0.0)
+        ) / epsilon
+        end_rate = (
+            self.sample(interpolator, interpolator.duration)
+            - self.sample(interpolator, interpolator.duration - epsilon)
+        ) / epsilon
+        midpoint = 0.5 * interpolator.duration
+        midpoint_rate = (
+            self.sample(interpolator, midpoint + epsilon)
+            - self.sample(interpolator, midpoint - epsilon)
+        ) / (2.0 * epsilon)
+        self.assertLess(float(np.abs(start_rate).max()), 0.01)
+        self.assertLess(float(np.abs(end_rate).max()), 0.01)
+        self.assertGreater(float(np.linalg.norm(midpoint_rate)), 0.1)
 
     def test_max_speed_return_stays_under_the_slew_clamp(self):
         interpolator = self.module.JointSpaceInterpolator("cpu")
         interpolator.reset_path(
             self.qs,
             self.module.scale_segment_times(self.durations, 3.0, min_time=0.4),
-            method="monotone_cubic_hermite",
+            method=self.INTERPOLATION_METHOD,
         )
         epsilon = 1e-4
         peak = 0.0

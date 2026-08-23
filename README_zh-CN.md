@@ -205,6 +205,35 @@ python sim_main.py --device cpu  --enable_cameras  --task  Isaac-PickPlace-Cylin
 
 **注意 2:** isaacsim-webrtc-streaming-client 是isaacsim提供的一个用于查看Sim窗口画面的工具，具体安装和使用可参考[官方教程](https://docs.isaacsim.omniverse.nvidia.com/6.0.0/installation/manual_livestream_clients.html).
 
+#### CES LoadingLine 自动 Pick/Place
+
+CES Wholebody 任务可以自动完成 Dex1 抓取、持物行走和放置。使用已确认的
+关节空间 Pick 轨迹运行：
+
+```bash
+python sim_main.py \
+  --device cuda:0 \
+  --enable_cameras \
+  --task Isaac-Move-CES-Product-G129-Dex1-Wholebody \
+  --robot_type g129 \
+  --enable_dex1_dds \
+  --auto_ces_pick_place \
+  --station_mode walk \
+  --ces_use_joint_waypoints \
+  --ces_waypoint_set ces_pick_smooth_v1 \
+  --ces_pick_speed 1.5
+```
+
+`ces_pick_smooth_v1` 正向硬下发 `00 → 10 → 20 → 30`。40 仍然只作为
+笛卡尔下降 IK 的动态零空间参考，不会作为手臂姿态硬下发。抬起产品后，以实时
+关节状态作为 40 阶段起点，先平滑回到 30 并停稳，再直接收到用户设计的胸前
+05：`40实时姿态 → 30 → 05`。`30 → 05` 原始时长为 3 秒，默认
+`--ces_pick_speed 1.5` 下实际播放 2 秒。旧的 `ces_pick_natural_v1` 和
+`ces_pick_natural_v2` 姿态组仍兼容原来的逆序回 00 行为。
+
+这条直达回收轨迹已经通过本地 URDF 预览确认，并覆盖 CPU 合约测试；产品避碰、
+夹持摩擦和持物行走平衡仍需在 Isaac Sim 中验收。
+
 #### 2.4.3 数据回放
 
 ```
