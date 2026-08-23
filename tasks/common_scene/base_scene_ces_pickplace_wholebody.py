@@ -136,6 +136,13 @@ _TABLE_XY_NUDGE = (0.45, 0.35)
 TABLE_SPAWN_POS = (_TABLE_XY[0] + _TABLE_XY_NUDGE[0], _TABLE_XY[1] + _TABLE_XY_NUDGE[1], 0.0)
 TABLE_SPAWN_ROT = _yaw_quat(_TABLE_YAW_BEFORE + _CLUSTER_YAW)
 
+# 灰色托盘相对桌心 y-0.06，再往世界 -X 挪一点。放置站不跟这块托盘走。
+PLACE_TRAY_SHIFT_X = -0.15
+PLACE_TRAY_CENTER_XY = (
+    TABLE_SPAWN_POS[0] + PLACE_TRAY_SHIFT_X,
+    TABLE_SPAWN_POS[1] - 0.06,
+)
+
 # Trailing world camera: ~1.15 m behind the robot, looking along its -X heading.
 _WORLD_CAM_POS = (ROBOT_INIT_POS[0] + 1.15, ROBOT_INIT_POS[1] - 0.08, 2.30)
 _WORLD_CAM_ROT = (0.5, -0.5, -0.5, 0.5)  # ROS camera looking world -X
@@ -246,8 +253,8 @@ def place_gray_tray_on_table(env, env_ids=None):
     if stage is None:
         return
     bbox = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
-    want_x = TABLE_SPAWN_POS[0]
-    want_y = TABLE_SPAWN_POS[1] - 0.06
+    want_x = PLACE_TRAY_CENTER_XY[0]
+    want_y = PLACE_TRAY_CENTER_XY[1]
     want_z0 = TABLE_TOP_Z + 0.002
     n_place = 0
     for i in range(env.num_envs):

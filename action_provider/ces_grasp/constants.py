@@ -10,6 +10,7 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
     PICK_STAND_X_B,
     PICK_STAND_XY as SCENE_PICK_STAND_XY,
     PICK_STAND_Y_B,
+    PLACE_TRAY_CENTER_XY,
     PLACE_TRAY_HEIGHT,
     PRODUCT_POS,
     ROBOT_INIT_POS,
@@ -249,17 +250,18 @@ PICK_STAND_XY = SCENE_PICK_STAND_XY
 SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
 SPAWN_STAND_YAW = PICK_STAND_YAW
 
-# 放置站面向桌子（yaw=π/2）。PLACE_TARGET_XY 就是灰色托盘中心
-# （见 base_scene 的 place_gray_tray_on_table：桌心 y-0.06）。
+# 放置站面向桌子（yaw=π/2）。站位仍按桌心托盘位置算，不跟着托盘 -X 偏移走。
+# PLACE_TARGET_XY 才是灰筐中心（IK 放置目标）。
 PLACE_STAND_YAW = 0.5 * math.pi
-PLACE_TARGET_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
-PLACE_STAND_XY = stand_xy(PLACE_TARGET_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
+PLACE_TARGET_XY = PLACE_TRAY_CENTER_XY
+_PLACE_STAND_FROM_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
+PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
 
 # HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
 # ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
 # ② 边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
-# ③ 先侧移上线再正向走进放置站，按 PLACE_STAND_XY 这个**坐标**双轴收敛
+# ③ 不停步，直接发 W（机体系 +vx）；转正后这就是世界 +Y，走进放置站
 CARRY_WALK_GAIT = WalkGait(
     vx=WALK_VX,
     vy=WALK_VY,

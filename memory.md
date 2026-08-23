@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-22（**Smooth Pick 正向已在 Isaac Sim 跑通并确认丝滑**；逆序回收已改为用户在 URDF-viz 设计的 `40→30→20→10→05` 胸前姿态，代码与 CPU 合约测试已通过，待 Isaac Sim 物理验收）
+更新时间：2026-08-23（`walk优化`：右转结束后直接发 W 走 +Y；pick 结束后立刻满幅 S 后退，不等站稳；walk→place 夹爪开合量锁死，到站钉实际骨盆 Z；灰筐往 −X 挪 15 cm，放置站不动。抬起仍是 8 cm，回收仍走 40(live)→30→05）
 
 **下一阶段：优化 place 动作。** 现在放置是 DiffIK + 笛卡尔插补去追世界灰筐中心，手臂为了凑 TCP 会大幅转肩转腕。计划改成用 URDF-viz **写死几个关节姿态点**（复用 pick 的 `ces_pick_smooth_v1` 清单与连续插值机制），关节空间回放，不让 IK 自由发挥。见 §11。
 
@@ -262,7 +262,7 @@ STAND_STABLE_TIME = 0.2             # 原 0.5；三者合计 2.1s → 0.7s，见
 STAND_PELVIS_Z = 0.755
 pick  x_b=0.30  y_b=-0.38  yaw=π     stand ≈ (-3.19, -1.33)
 place x_b=0.46  y_b=-0.18  yaw=π/2   stand ≈ (-2.27, -0.77)
-PLACE_TARGET_XY = 桌中心 y-0.06 ≈ (-2.087, -0.312)  # 产品往桌内，避免半截露沿
+PLACE_TARGET_XY = 桌心 y-0.06 再 −X 15 cm ≈ (-2.237, -0.312)  # 放置站仍按未偏移桌心算，不跟着托盘走
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.08
 # 灰筐 container_h20 留在桌上；不要贴桌 IK，会抖
 ```
@@ -321,11 +321,11 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
 - **转弧带的是后退不是前进**：后退是唯一实测能迈步的模式；而且弧终点被推到 `y=-1.705`，第③段留 0.93 m 行程，`stop_margin` 才有作用空间。若改成前进转弧，转完只剩 0.18 m 到桌前，而桌沿余量只有 0.12 m，一过冲就撞桌。
 - 转弧全程 x 单调增大，是**远离** CES 的方向；最靠近 CES 的时刻就是弧起点 `x=-2.642`（比抓取站还外 0.55 m）。
 - `WALK_BACKOFF_TRIM` 已归零：它和 `WALK_TURN_LEAD` 同轴同向，"宁可退不够"的作用由 lead 承担，两个一起留会退得太少、贴着 CES 转弧。
-- **后退 → 转弧之间不停**：`WalkLeg.settle_before=0.0` 只给 turn 段，把后退指令直接交接给转弧。先 settle 成静止再起纯偏航正是策略转不动的那个工况。turn → forward 之间仍保留 `WALK_LEG_SETTLE=0.5 s`。
+- **后退 → 转弧 → 前进全程不停**：`settle_before=0.0` 同时给 turn 和 approach。先 settle 成静止再起下一步，策略抬不起步（转不动 / 转完不往 +Y 走）。右转结束后直接发机体系 `+vx`（W）；转正后面朝桌子时这就是世界 +Y。下发滤波在 `vx` 变号时跳变，不从 −0.45 ramp 过 0（过 0 会再次停步）。
 - 漂移保护：转弧走了 `WALK_TURN_MAX_DRIFT=0.70 m` 还没转到位，说明策略没吃下 `wz`，此时把幅值提到 `WALK_WZ_MAX=1.55` 并**把弧反向**（mode 记作 `turn_pinned`，日志打醒目告警），边把漂移走回去边继续试。**注意这里不能砍掉 `vx`**：`vx` 是唯一能触发步态的轴，归零只会原地冻住、白等 60 s 超时。
 - `WALK_YAW_ARRIVE=0.40` 是**转向的 stop_margin**（0.15 → 0.25 → 0.40）：实测在 0.25 处松手后还会多转约 14°，即余转合计约 28°，所以提前到约 23° 松手。落点 `head=70°`（目标 90°）就是松手太晚的证据。
-- 灰色托盘中心 = `PLACE_TARGET_XY (-2.087, -0.312)`（`place_gray_tray_on_table`：桌心 y−0.06）。
-- 交点由 `build_carry_route` 算出，站位常量一改就自动跟着变。
+- 灰色托盘中心 = `PLACE_TARGET_XY`（桌心 y−0.06 再 `PLACE_TRAY_SHIFT_X=-0.15`）。**放置站不跟托盘走**，仍按未偏移桌心算 `(-2.267, -0.772)`。
+- 走位交点由 `build_carry_route` 从**放置站**算出，挪托盘不会改路线。
 - 进度按**行走轴投影**算（不是欧氏距离），侧向漂移不会让某段转不完。
 - 平移中的纠偏也是固定幅值 + 带回差的死区：朝向差 > `WALK_ALIGN_YAW=0.20` 才发 `wz`，> `WALK_REALIGN_YAW=0.60` 就放弃行进轴、**带着 `turn_vx` 弧线转正**（realign 以前发纯偏航，同样不起步，一起改了）；侧向差 > `WALK_LATERAL_TOL=0.10` 才发 `vy` 侧移。`align_yaw` 从 0.30 收到 0.20 是因为转弧收尾会留约 14° 残差，0.30（17°）够不到它 —— 日志里 `err=+14deg` 而 `cmd_b` 第三位一直是 0，机器人就那么歪着走完最后一段。
 - **最后一段：停止线是唯一不可谈判的条件**（`WalkLeg.lateral_first=True`）。这条经历了三次撞桌才定下来，务必别再往回改：
@@ -372,9 +372,10 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
 - [x] 右转 90°：`vx=-0.45` + `wz=-1.20` 转弧、转向前不 settle
 - [x] 侧向纠偏必须斜行（`vx` 永不为零）
 - [x] 靠近桌子就停死不再前进：停止线闩锁 + 硬性禁入兜底，900 组扫描 0 撞桌
-- [x] 走到放置站范围（Isaac Sim 2026-08-19）
+- [x] 走到放置站范围（Isaac Sim 2026-08-19；2026-08-23 再验：转完直接 W 能走到 place）
 - [x] spawn 直接在抓取站，不再瞬移
 - [x] 夹爪全程 PD 闭合，产品靠摩擦跟着走，不焊 TCP
+- [x] 2026-08-23 walk优化：转弧→前进不停、直接发 W；pick 完立刻满幅 S，不等站稳；walk→place 夹爪目标锁死、到站钉实际骨盆 Z；托盘 −X 15 cm、站位不动
 - [ ] 按日志 `coast` 把 `WALK_STOP_MARGIN_PLACE` 从 0.30 收到 `coast + 0.05`，压掉最坏情况 75 cm 的前伸
 - [ ] 到站 `dxy` 落在 ~10 cm 内、`along>0`、`on_target` 不报 off-target
 

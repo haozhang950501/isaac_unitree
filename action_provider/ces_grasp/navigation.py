@@ -196,12 +196,13 @@ def build_carry_route(
         # No pause before the arc: coasting to a standstill first is exactly the
         # case the policy will not start turning from.
         WalkLeg("turn_to_table", "turn", place_yaw, settle_before=0.0),
-        # The stand coordinate is the goal, not just its distance along +Y: the
-        # table is right in front of it, so arriving sideways puts the tote out
-        # of the arm's reach and arriving late walks into the table.
+        # No pause after the arc either: zeroing vx kills the gait, and this
+        # policy will not start a forward walk from a standstill.  Hand
+        # body-frame +vx (W) straight over; at place yaw = π/2 that is world +Y.
         WalkLeg(
             "approach_place", "forward", place_yaw, place_xy,
             stop_margin=place_stop_margin, lateral_first=True,
+            settle_before=0.0,
         ),
     ]
 

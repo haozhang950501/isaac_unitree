@@ -73,6 +73,7 @@ class CesCommand:
     arm_q_ref: torch.Tensor | None = None
     arm_q_lo: torch.Tensor | None = None
     arm_q_hi: torch.Tensor | None = None
+    snap_z: float | None = None
 
 
 def top_down_grasp_quat(jaw_axis_w: torch.Tensor) -> torch.Tensor:
@@ -166,6 +167,7 @@ class CesPickPlaceStateMachine:
         self._walk_unstable_t = 0.0
         self._place_lock_xy: tuple[float, float] | None = None
         self._place_lock_yaw: float | None = None
+        self._place_lock_z: float | None = None
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
         extra = f" arm_speed=x{self.speed_scale:.2f}"
@@ -234,6 +236,7 @@ class CesPickPlaceStateMachine:
         self._walk_unstable_t = 0.0
         self._place_lock_xy = None
         self._place_lock_yaw = None
+        self._place_lock_z = None
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
 
@@ -256,6 +259,7 @@ class CesPickPlaceStateMachine:
         snap=False,
         snap_xy=None,
         snap_yaw=None,
+        snap_z=None,
         guide=False,
         done=False,
         failed=False,
@@ -294,6 +298,7 @@ class CesPickPlaceStateMachine:
             arm_q_ref=arm_q_ref,
             arm_q_lo=q_lo,
             arm_q_hi=q_hi,
+            snap_z=snap_z if snap else None,
         )
 
     def _squeezing(self) -> bool:
@@ -1165,13 +1170,29 @@ class CesPickPlaceStateMachine:
             if q is None:
                 q = self.ctx.get_right_arm_q()[0].clone()
                 self._carry_arm_q = q
-            if self.t >= C.CARRY_TIME:
-                if self.stop_after == "lift":
+            if self.stop_after == "lift":
+                if self.t >= C.CARRY_TIME:
                     print("[ces_fsm] stop_after=lift — still squeezing")
                     self._transition(CesPickPlacePhase.DONE)
-                else:
-                    print("[ces_fsm] carry frozen — snap to table (arm locked, gripper closed)")
-                    self._transition(CesPickPlacePhase.HOLD)
+                return self._cmd(
+                    tcp=None,
+                    arm_q=q,
+                    snap=True,
+                    snap_xy=C.PICK_STAND_XY,
+                    snap_yaw=C.PICK_STAND_YAW,
+                )
+            # walk：pick 一结束就满幅发 S 后退（世界 +X），不要钉盆等站稳。
+            # 等站稳再松盆、再从 0 ramp 后退，抱件会先往前栽进 CES。
+            if self.station_mode == "walk":
+                self._walk = [-C.WALK_VX, 0.0, 0.0, C.CARRY_WALK_GAIT.height]
+                if hasattr(self.ctx, "prime_walk_filt"):
+                    self.ctx.prime_walk_filt(self._walk)
+                print("[ces_fsm] pick done — S backoff now (no stand wait)")
+                self._transition(CesPickPlacePhase.GOTO_PLACE)
+                return self._cmd(tcp=None, arm_q=q, guide=True)
+            if self.t >= C.CARRY_TIME:
+                print("[ces_fsm] carry frozen — snap to table (arm locked, gripper closed)")
+                self._transition(CesPickPlacePhase.HOLD)
             return self._cmd(
                 tcp=None,
                 arm_q=q,
@@ -1201,8 +1222,9 @@ class CesPickPlaceStateMachine:
                         "(back out → turn right → walk in; fixed-magnitude commands, "
                         "arm frozen, gripper closed)"
                     )
-                    if hasattr(self.ctx, "reset_walk_filt"):
-                        self.ctx.reset_walk_filt()
+                    self._walk = [-C.WALK_VX, 0.0, 0.0, C.CARRY_WALK_GAIT.height]
+                    if hasattr(self.ctx, "prime_walk_filt"):
+                        self.ctx.prime_walk_filt(self._walk)
                     self._transition(CesPickPlacePhase.GOTO_PLACE)
                 else:
                     print("[ces_fsm] raise at pick stand then snap to table")
@@ -1257,6 +1279,7 @@ class CesPickPlaceStateMachine:
                         float(root_pos[0, 1]),
                     )
                     self._place_lock_yaw = self.ctx.get_heading()
+                    self._place_lock_z = float(root_pos[0, 2])
                     xy, yaw = self._place_pin_pose()
                     # Split the error along the approach axis vs sideways:
                     # "along" positive means stopped short of the stand (good,
@@ -1296,6 +1319,7 @@ class CesPickPlaceStateMachine:
                 snap=pin,
                 snap_xy=xy,
                 snap_yaw=yaw,
+                snap_z=self._place_lock_z,
                 guide=walking and not pin,
             )
 
@@ -1324,6 +1348,7 @@ class CesPickPlaceStateMachine:
                 snap=True,
                 snap_xy=pin_xy,
                 snap_yaw=pin_yaw,
+                snap_z=self._place_lock_z,
             )
 
         if self.phase is CesPickPlacePhase.PLACE_DESCEND:
@@ -1337,6 +1362,7 @@ class CesPickPlaceStateMachine:
                 snap=True,
                 snap_xy=pin_xy,
                 snap_yaw=pin_yaw,
+                snap_z=self._place_lock_z,
             )
 
         if self.phase is CesPickPlacePhase.RELEASE:
@@ -1353,6 +1379,7 @@ class CesPickPlaceStateMachine:
                 snap=True,
                 snap_xy=pin_xy,
                 snap_yaw=pin_yaw,
+                snap_z=self._place_lock_z,
             )
 
         if self.phase is CesPickPlacePhase.RETRACT:
@@ -1372,6 +1399,7 @@ class CesPickPlaceStateMachine:
                 snap=True,
                 snap_xy=pin_xy,
                 snap_yaw=pin_yaw,
+                snap_z=self._place_lock_z,
             )
 
         if self.phase is CesPickPlacePhase.DONE:
@@ -1398,6 +1426,7 @@ class CesPickPlaceStateMachine:
                 snap=True,
                 snap_xy=pin_xy,
                 snap_yaw=pin_yaw,
+                snap_z=self._place_lock_z,
                 done=True,
             )
 

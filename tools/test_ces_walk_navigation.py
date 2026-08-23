@@ -243,11 +243,18 @@ class TestCarryRoute(unittest.TestCase):
         self.assertEqual(first_turn, last_backoff + 1)
         self.assertEqual(modes[last_backoff][1], "reverse")
         self.assertEqual(modes[first_turn][1], "turn")
-        # ... but the pause before walking into the table is still there.
+        # Same for the last leg: a pause after the turn is what stops W
+        # from ever starting, so the robot never walks world +Y.
+        last_turn = max(i for i, m in enumerate(modes) if m[0] == "turn_to_table")
         first_approach = min(
             i for i, m in enumerate(modes) if m[0] == "approach_place"
         )
-        self.assertEqual(modes[first_approach][1], "settle")
+        self.assertEqual(first_approach, last_turn + 1)
+        self.assertGreater(steps[first_approach].command[0], 0.0)
+        yaw = PLACE_YAW - steps[first_approach].yaw_error
+        vx, vy = steps[first_approach].command[0], steps[first_approach].command[1]
+        world_y = vx * math.sin(yaw) + vy * math.cos(yaw)
+        self.assertGreater(world_y, 0.0)
 
     def test_turn_reverses_the_arc_after_max_drift(self):
         """If the arc travels without turning, drive it back at the higher rate."""
@@ -309,7 +316,6 @@ class TestCarryRoute(unittest.TestCase):
         modes = [step.mode for step in steps]
         self.assertEqual(modes.index("reverse"), 0)
         self.assertLess(modes.index("turn"), modes.index("forward"))
-        self.assertIn("settle", modes)
 
     def test_backoff_never_walks_forward_into_the_machine(self):
         _walker, steps = run_route()
