@@ -13,12 +13,12 @@
   ],
   "q": [
     -1.2266918,
-    -0.17189792,
-    1.5731673,
-    0.8398857,
-    0.017243762,
-    0.06550017,
-    1.0793102
+    -0.2318979,
+    1.4931674,
+    1.2198853,
+    -0.042756237,
+    0.005500171,
+    1.1593101
   ],
   "purpose": "User-authored Place pose 15. Unitree commands 05 -> 15 in joint space, then holds the live TCP X/Y and uses position-only IK for the final Z-only descent.",
   "control_role": "place_joint_space_endpoint_before_vertical_ik",
