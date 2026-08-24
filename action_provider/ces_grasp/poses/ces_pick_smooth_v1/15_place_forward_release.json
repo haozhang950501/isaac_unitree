@@ -12,12 +12,12 @@
     "right_wrist_yaw_joint"
   ],
   "q": [
-    -1.2466918,
-    -0.37189797,
-    1.6931672,
-    0.7598856,
-    0.23724373,
-    0.10550016,
+    -1.2266918,
+    -0.17189792,
+    1.5731673,
+    0.8398857,
+    0.017243762,
+    0.06550017,
     1.0793102
   ],
   "purpose": "User-authored Place pose 15. Unitree commands 05 -> 15 in joint space, then holds the live TCP X/Y and uses position-only IK for the final Z-only descent.",
