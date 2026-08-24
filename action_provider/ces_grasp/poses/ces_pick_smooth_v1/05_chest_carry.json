@@ -12,41 +12,41 @@
     "right_wrist_yaw_joint"
   ],
   "q": [
-    -0.7999999,
-    -0.24,
-    0.59999996,
-    0.09000012,
-    0.36,
-    -0.13,
-    0.72999984
+    -0.75999993,
+    -0.26,
+    0.58,
+    -0.68999976,
+    -0.34,
+    -0.05000001,
+    0.08999996
   ],
-  "purpose": "User-authored final chest carry posture for the reverse Pick return path.",
+  "purpose": "User-authored final chest carry posture for the 30 -> 20 -> 05 reverse Pick return path and the starting posture for the next Place trajectory.",
   "control_role": "return_joint_space_carry_endpoint",
   "unitree_arm_q_allowed": true,
   "source": "manual_urdf_viz_capture",
-  "source_pose": "urdf_pose_toolkit/poses/ces_return_to_chest_v1/05_chest_carry_draft.json",
-  "captured_at": "2026-08-22T23:31:29+08:00",
+  "source_pose": "urdf_pose_toolkit/poses/ces_return_to_chest_v2/05_chest_carry_draft.json",
+  "captured_at": "2026-08-24T12:11:47+08:00",
   "palm_position_in_pelvis_m": [
-    0.271644633,
-    0.001821767,
-    0.250631392
+    0.156375458,
+    -0.020317727,
+    0.341983257
   ],
   "tcp_proxy_position_in_pelvis_m": [
-    0.271314453,
-    0.115487872,
-    0.268092995
+    0.152521621,
+    0.06116259,
+    0.423045615
   ],
   "validation": {
     "joint_limit_margin_rad": [
-      2.2892001,
-      1.8282,
-      2.01800004,
-      1.13720012,
-      1.612222054,
-      1.484429558,
-      0.884429718
+      2.32920007,
+      1.8482,
+      2.038,
+      0.35720024,
+      1.632222054,
+      1.564429548,
+      1.524429598
     ],
-    "min_joint_limit_margin_rad": 0.884429718,
+    "min_joint_limit_margin_rad": 0.35720024,
     "joint_limit_violations": []
   },
   "validation_boundary": "URDF-viz kinematic authoring only; Isaac Sim collision, friction carry, and balance acceptance pending."

@@ -1,8 +1,8 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-23（`walk优化`：右转结束后直接发 W 走 +Y；pick 结束后立刻满幅 S 后退，不等站稳；walk→place 夹爪开合量锁死，到站钉实际骨盆 Z；灰筐往 −X 挪 15 cm，放置站不动。抬起仍是 8 cm，回收仍走 40(live)→30→05）
+更新时间：2026-08-24（Pick 回收为 `40(live)→30→20→05`；Place 已集成人工 `05→15` 关节姿态，15 后锁实时 TCP X/Y，仅由 Unitree 插补与位置 IK 向下补偿 Z，不使用 pose 25。）
 
-**下一阶段：优化 place 动作。** 现在放置是 DiffIK + 笛卡尔插补去追世界灰筐中心，手臂为了凑 TCP 会大幅转肩转腕。计划改成用 URDF-viz **写死几个关节姿态点**（复用 pick 的 `ces_pick_smooth_v1` 清单与连续插值机制），关节空间回放，不让 IK 自由发挥。见 §11。
+**下一阶段：阿里云 Isaac Sim 验收 Place。** 重点看 `05→15` 持物避碰、15 后纯 Z 下降是否进入灰筐且不碰沿、产品释放和最终 Z 余量；需要时只调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要重新加入世界 X/Y 目标。见 §11。
 
 ## 1. 项目概况
 
@@ -17,21 +17,23 @@
 | **当前主任务** | `Isaac-Move-CES-Product-G129-Dex1-Wholebody` |
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
-**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → `40(live)→30→20→10→05` 收到胸前 → HOLD 后 `walk` 真实走到放置站 → 灰筐上方松爪自由落下。夹取靠垫面摩擦，不焊 TCP。
+**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → `40(live)→30→20→05` 收到胸前 → HOLD 后 `walk` 真实走到放置站 → `05→15` 人工关节姿态 → 锁实时 X/Y、只落 Z → 松爪。夹取靠垫面摩擦，不焊 TCP。
 
-**归档状态（2026-08-19，`pick+walk_done`）**：
+**当前状态（更新至 2026-08-24）**：
 
 - 机器人 **spawn 就在抓取站**（`ROBOT_INIT_POS = PICK_STAND_XY`），启动不再瞬移。
-- 抬起后阶段 `RETURN_HOME`（枚举名保留）：Smooth v1 按独立回收清单 `40(live)→30→20→10→05_chest_carry` 收到胸前，夹爪保持闭合，到05后再 walk；旧 V1/V2 回退组仍保持逆序回00。
+- 抬起后阶段 `RETURN_HOME`（枚举名保留）：Smooth v1 按独立回收清单 `40(live)→30→20→05_chest_carry` 收到胸前，夹爪保持闭合，到05后再 walk；旧 V1/V2 回退组仍保持逆序回00。
 - **Walk 换站已跑通**：「后退 → 边退边右转（转弧）→ 前进」，固定幅值 + 死区（§6.2）。Isaac Sim 实测后退、右转、走到放置站范围都 OK。
-- **Place 动作仍是 IK + 插补，未优化**：DiffIK 追世界灰筐中心，关节姿态和腕转角很大。下一阶段换成写死的关节路点，见 §11。
-- 纯 CPU 导航测试 26 项已过，含 900 组撞桌扫描（§6.2 末）。
+- **Place 已改为人工 q + 最小 IK 交接**：05→15 用清单关节插补；15 后不追灰筐中心 X/Y，只保留实时 X/Y 并向下补偿 Z。pose 25 已取消，见 §11。
+- Pick/Place/导航共 44 项 CPU 合约测试已过，导航仍含 900 组撞桌扫描（§6.2 末）。
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
 **2026-08-21 Smooth Pick design**：用户在 `urdf_pose_toolkit` 中确认 `00→10→20→30→40` 视觉效果。项目新增 `ces_pick_smooth_v1` 并设为默认；运行时关节硬轨迹只有 `00→10→20→30`，`30→40` 仍只作下降 IK 的动态 `q_ref`。正向 `05_forward_reach/25` 从新组移除但 V2 文件原样保留；00/10/20/30/40 的 q 与 V2 完全一致。关节插值改为清单可选的 `monotone_cubic_hermite`。**正向和当时的回00动作已在 Isaac Sim 实跑确认完全 OK 且丝滑。**
 
-**2026-08-22 逆序回收到胸前**：用户在 `urdf_pose_toolkit` 从10手工设计并保存 `05_chest_carry`，q=`[-0.7999999,-0.24,0.59999996,0.09000012,0.36,-0.13,0.72999984]`。Smooth v1 清单新增独立 `return_path`：逻辑序列 `40→30→20→10→05`，实际不硬下发 authored 40，而以抬起后的实时 q 作为“40阶段”起点，再关节回放到30/20/10/05；10处因全关节换向而平滑停稳后再收向05。旧 V1/V2 无 `return_path` 时仍自动逆序回00。16项 CPU 合约测试通过；新05的夹持、避碰、行走平衡尚未做 Isaac Sim 验收。
+**2026-08-22～23 回收历史**：第一版胸前 05 为 `[-0.7999999,-0.24,0.59999996,0.09000012,0.36,-0.13,0.72999984]`；回收曾走 `40→30→20→10→05`，随后去掉中间 20/10 改成 `40(live)→30→05`。阿里云实测证明直达路径会让夹持产品刮抽屉边缘，因此该直达方案已被 2026-08-24 版本替代。
+
+**2026-08-24 回收 V2**：用户在 `urdf_pose_toolkit/poses/ces_return_to_chest_v2/` 重新人工保存 05，q=`[-0.75999993,-0.26,+0.58,-0.68999976,-0.34,-0.05000001,+0.08999996]`，URDF 关节限位最小余量 `0.3572 rad`。正式路径为 `40(live)→30→20→05`：40 使用抬起后实时 q，不硬下发 authored q_ref；`40(live)→30` 单独用 smoothstep 前导段，避免未知 live q 改变后续曲线；到 30 后再按 URDF-viz 确认的单调三次 Hermite `30→20→05` 退出抽屉并收到新的贴胸姿态。原始时长 `0.8/1.2/3.0 s`，默认 1.5× 后约 `0.53/0.80/2.00 s`。URDF-viz 已确认，Pick/Walk 共 42 项 CPU 合约测试通过；新的夹持避碰和 walk 平衡仍需在 Isaac Sim 复验。
 
 **2026-08-21 Pick 提速**：动作没问题但太慢，加 `--ces_pick_speed` 时间缩放，默认 **1.5×**。只除 `UNFOLD(00→30)` / `LIFT` / `RETURN_HOME` 三段关节轨迹的**时长**，路点 q 和曲线形状一字不动（均匀时间缩放 = 同一条曲线、速度整体 ×1.5）。`DESCEND` / `GRASP` 故意不缩放。pick 段 18.4 s → 14.0 s（−24%）。详见 §10.5。
 
@@ -145,15 +147,15 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 ```text
 开关开：SETTLE → GOTO_PICK → UNFOLD(00→30 关节) → DESCEND(锁XY、slerp朝向、落Z、q_ref 30→40) → GRASP
 开关关：SETTLE → GOTO_PICK → UNFOLD → APPROACH → DESCEND → GRASP
-之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → RETURN_HOME(40 live→30→20→10→05胸前) → CARRY/HOLD
-        → GOTO_PLACE(walk 三段：后退→转弧→前进，到线停死) → PLACE_APPROACH(抬臂 IK + 插补)
-        → RELEASE → RETRACT
+之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → RETURN_HOME(40 live→30→20→05胸前) → CARRY/HOLD
+        → GOTO_PLACE(walk 三段：后退→转弧→前进，到线停死，保持05) → PLACE_APPROACH(关节05→15)
+        → PLACE_DESCEND(锁实时XY、Unitree IK只落Z) → RELEASE → RETRACT(15→05)
 ```
 
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
 - 夹住后：手臂改走 PD（不再瞬移关节），Dex1 只走 PD 闭合，靠垫面摩擦把件提起。
 - 换站：`walk` 走真实步态（§6）；`snap` 仅作对照，瞬移骨盆时才把零件跟着平移（不是每帧焊 TCP）。
-- 放置：不到桌面接触，TCP 停在灰筐沿上方约 8 cm，冻臂后张开 Dex1，产品自由落。**目前仍是 IK + 插补，待优化成写死关节路点（§11）。**
+- 放置：人工 q 决定 X/Y 姿态，`05→15` 关节插补后只做 Z 轴位置 IK；初始目标是灰筐沿上方 20 mm，阿里云实测后再调（§11）。
 - `r`：`env.reset()` + `reset_object_self` 把 Product 写回托盘，并 `CESGrasp.reset_task()`。
 
 ### 3.2 踩过的坑（不要再走）
@@ -250,7 +252,7 @@ ARM_SLEW_RAD_LIFT = 0.012           # 仅 carry/hold/goto_place；lift 走规划
 PICK_SPEED_SCALE  = 1.5             # pick 手臂时间缩放默认值，CLI 可覆盖
 PICK_SPEED_MAX    = 3.0             # 上限；4.5× 处才会撞 slew，留了余量
 PICK_SEGMENT_MIN_TIME = 0.40        # 缩放后单段时长下限，防止压成阶跃
-05_chest_carry q = (-0.800,-0.240,+0.600,+0.090,+0.360,-0.130,+0.730)
+05_chest_carry q = (-0.760,-0.260,+0.580,-0.690,-0.340,-0.050,+0.090)
 ```
 
 ### 5.3 站位
@@ -284,7 +286,7 @@ Product 质量     0.25 kg
 ```text
 路点：00→05 1.1  05→10 0.85  10→20 1.5  20→25 1.3  25→30 1.1
 DESCEND 1.1  GRASP 1.0  GRASP_WAIT_MAX 0.6  LIFT 2.2
-CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETRACT 0.8
+CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-only) 1.2/速度倍率  RELEASE 0.8
 ```
 
 ---
@@ -337,12 +339,12 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
   - 姿态窗口仍**不能小于对应纠偏的进入阈值**，否则永远报不出 on_target。
 - **`stop_margin` 必须 ≥ 滑行量，这是最关键的一个数**。`vx=0.45` 松手后滑行约 0.25 m，而旧的 `WALK_STOP_MARGIN_PLACE=0.20` 比滑行量还小 → 到 0.20 才停必然冲过站点。又因为 `vx` 低于死区根本不迈步，**没法缓刹**，唯一手段就是提前松手。现在 `0.30`。
   - 到站日志直接算出 **`coast = margin - along`** 和 `arm_reach`。**下次实机跑完就按 `coast + 0.05` 重设这个余量**，别再猜。
-  - `along` 必须 >0（停短）。停短是可降级的：放置 IK 打的是**世界**灰筐中心（`_place_drop_pos`），手臂会自己多伸，误差进 `tcp_err` 日志；越过就是撞桌、直接摔。
-  - 设计前伸 `X_B_PLACE=0.46 m`，停短 `along` 就要伸 `0.46+along`。CPU 扫描下 0.30 的余量对应前伸 45~75 cm —— 上限偏大，等实测 `coast` 出来收紧余量就能压回去。
+  - `along` 必须 >0（停短）。2026-08-24 的 Place 不再追世界灰筐中心：到站后执行固定 05→15，末段只落 Z；因此停位误差会原样反映到放置 X/Y。用户已明确不要求 TCP 自动补偿 X/Y，安全上仍是停短优先，绝不能越过撞桌。
+  - `X_B_PLACE=0.46 m` 现在只用于放置站几何和日志，不再作为 Place IK 的 X 目标。等实测 `coast` 出来仍应收紧停车余量，减少放置 XY 漂移。
 - **硬性禁入闩锁（兜底，不依赖规划逻辑）**：`_table_keepout_hit` 只看骨盆相对放置站的投影，越过 `WALK_TABLE_AHEAD_OF_STAND(0.12) - WALK_TABLE_SAFE(0.06)` 就无条件零指令 + 告警 + 就地放置。前两次撞桌都是**规划分支漏了停止条件**，所以最关键的那个"停"不能只写在规划里。
 - 走路时不调用 `_apply_snap`、不移动 Product root；右臂保持 `_carry_arm_q`、Dex1 保持 `GRIPPER_CLOSED`，件仍只靠垫面摩擦。
 - 到站稳定 `WALK_ARRIVE_HOLD=0.35 s` 后锁实际骨盆位姿，日志打 `dxy/dyaw` + **分解到行走轴的 `along`（+=停短）和侧向 `side`（−=偏左）** + `coast` + `arm_reach`。旧故障会打成 `along=-150mm side=-300mm`。
-- 走路到站有几厘米误差不用单独补 XY：放置 IK 的目标是**世界**灰筐中心（`_place_drop_pos`），骨盆停在哪都指向同一点，误差自动进 `tcp_err`。（旧记录里的 `PLACE_HOLD_XY_M_WALK` 常量代码里并不存在，已删。）
+- 走路到站后锁实际骨盆位姿；Place 不做世界 X/Y 补偿，人工 15 决定手臂横向位置，最终 IK 只改 Z。旧记录里的 `PLACE_HOLD_XY_M_WALK` 常量代码里并不存在。
 
 纯 CPU 测试：`python -m unittest tools.test_ces_walk_navigation`（26 项）。死区模型是"|vx|<0.30 / |vy|<0.25 / |wz|<0.40 不动"，外加最关键的一条：**`vx` 低于死区时整条指令作废**（`vy`/`wz` 再大也不动），用来复现两次真实故障 —— 原地纯偏航转不动、放置站前纯侧移冻住 18 s。
 
@@ -383,7 +385,7 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH 2.8  PLACE_DESCEND 跳过  RELEASE 0.8  RETR
 
 HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 和夹爪闭合，件靠摩擦跟着走。
 
-**站位 / TCP（v2 基线 lift_done 实测；新05接入后的 HOLD TCP 待重跑更新）：**
+**站位 / TCP（v2 基线 lift_done 实测；2026-08-24 新05接入后的真实 HOLD TCP 待重跑更新）：**
 
 | 量 | 值 |
 |---|---|
@@ -397,7 +399,7 @@ HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 
 | 来源 | q |
 |---|---|
 | 30 交接实测（HOLD 同族，抬起前） | `[-1.421, -1.254, +1.612, +1.031, +0.289, -0.077, +1.466]` |
-| HOLD / `_carry_arm_q`（当前 Smooth v1） | `05_chest_carry = [-0.800, -0.240, +0.600, +0.090, +0.360, -0.130, +0.730]` |
+| HOLD / `_carry_arm_q`（当前 Smooth v1） | `05_chest_carry = [-0.760, -0.260, +0.580, -0.690, -0.340, -0.050, +0.090]` |
 | V2 authored 05（历史伸手路点，不是当前 HOLD 05） | `[-0.55, -0.15, +0.22, +0.90, +0.20, +0.10, +0.35]` |
 | 当前 authored 10 | `[-0.70, -0.22, +0.38, +0.75, +0.32, -0.05, +0.55]` |
 
@@ -477,55 +479,44 @@ unitree_sim_isaaclab/
 
 运行时 30 后**锁 XY、只落 Z**，朝向 2 s slerp 到产品夹持姿态；40 只作 `q_ref`。
 
-### 当前默认：Smooth Pick v1（2026-08-22）
+### 当前默认：Smooth Pick v1（2026-08-24）
 
 - 姿态目录：`action_provider/ces_grasp/poses/ces_pick_smooth_v1/`。
-- 正向 q 保持 V2 已验证的 `00/10/20/30/40` 不变，正向只去掉冗余 `05_forward_reach/25`；另新增用户手工设计的逆向终点 `05_chest_carry`。
+- 正向 q 保持 V2 已验证的 `00/10/20/30/40` 不变，正向只去掉冗余 `05_forward_reach/25`；逆向终点使用用户 2026-08-24 重新设计的 `05_chest_carry`。
 - 运行时硬下发：`00→10→20→30`；时长 `1.75 / 2.07 / 1.20 s`。`30→40` 的 `1.20 s` 仍是动态 `q_ref` 参考，不把 40 当 `arm_q`。
-- `trajectory_manifest.json::return_path`：逻辑 `40→30→20→10→05`；40使用抬起后的实时 q，不硬下发 q_ref 文件。原始时长 `0.8 / 1.2 / 2.07 / 1.75 s`，默认1.5×后 `0.53 / 0.80 / 1.38 / 1.17 s`。单调三次 Hermite 在20连续通过，在10因全关节换向平滑停稳，再收到05。
+- `trajectory_manifest.json::return_path`：逻辑 `40→30→20→05`；40 使用抬起后的实时 q，不硬下发 q_ref 文件。原始时长 `0.8 / 1.2 / 3.0 s`，默认 1.5× 后 `0.53 / 0.80 / 2.00 s`。单调三次 Hermite 经 20 退出抽屉，再连续收到新 05。
 - `pose_library.py` 优先读取独立 `return_path`；旧 V1/V2 没有该字段时，兼容回退为“实时 q→正向路点逆序→00”。
 - 默认已同时改到 `sim_main.py --ces_waypoint_set` 与 `constants.py::WAYPOINT_SET_DEFAULT`；V2 / V1 均保留，加载未声明插值的旧清单仍用原 `segment_smoothstep`，兼容旧行为。
-- 本地 `urdf-viz` 已完整预览正向 `00→10→20→30→40`，并由用户完成逆向 `30→20→10→05` 设计；16项 CPU 合约测试通过：
+- 本地 `urdf-viz` 已完整预览正向 `00→10→20→30→40`，并由用户完成逆向 `30→20→05` 设计；CPU 合约测试命令：
 
 ```bash
 python -m unittest tools.test_ces_smooth_pick -v
 ```
 
-- **Isaac Sim 验收边界**：2026-08-21 已验的是正向和旧的逆序回00；2026-08-22 新增的胸前05只完成 URDF-viz 设计、清单/代码接入和CPU测试，尚未证明夹持不掉、退出抽屉不碰撞或walk平衡稳定。
+- **Isaac Sim 验收边界**：阿里云实测已证明旧 `30→05` 会刮抽屉；2026-08-24 的 `30→20→05` 与新 05 目前只完成 URDF-viz 设计和代码接入。仍需重新证明产品不刮边、不掉落、不碰胸，以及新贴胸姿态下 walk 平衡稳定。
 
 ### 10.5 Pick 提速：`--ces_pick_speed`（2026-08-21）
 
-**原时间账（walk 模式，SETTLE → HOLD 结束 ≈ 18.4 s）：**
+**当前受 `--ces_pick_speed` 影响的关节段：**
 
-| 阶段 | 原时长 | 1.5× 后 |
+| 阶段 | authored | 默认 1.5× 后 |
 |---|---|---|
-| SETTLE + GOTO_PICK | 2.1 s | 2.1 s（不缩放） |
 | UNFOLD `00→10→20→30` | 5.27 s | 3.51 s |
-| DESCEND | 1.1 s | 1.1 s（不缩放） |
-| GRASP | 1.0 s | 1.0 s（不缩放） |
 | LIFT | 2.2 s | 1.47 s |
-| RETURN_HOME `40(live)→30→20→10→05` | 5.82 s | 3.88 s |
-| CARRY + HOLD | 0.9 s | 0.9 s（不缩放） |
-| **合计** | **18.4 s** | **14.0 s** |
+| RETURN_HOME `40(live)→30→20→05` | 5.00 s | 3.33 s |
+| **上述三段合计** | **12.47 s** | **8.31 s** |
 
-两段关节轨迹回放占 60%，所以只压它们就够。各倍率实测账（`seg_s` 为 `00→10/10→20/20→30`）：
-
-| `--ces_pick_speed` | seg_s | UNFOLD | LIFT | RETURN | pick 合计 | 峰值 rad/s |
-|---|---|---|---|---|---|---|
-| 1.0（原速） | 1.75/2.07/1.20 | 5.27 | 2.20 | 5.82 | 18.4 s | 0.90 |
-| **1.5（默认）** | 1.17/1.38/0.80 | 3.51 | 1.47 | 3.88 | **14.0 s** | 1.35 |
-| 2.0 | 0.88/1.03/0.60 | 2.63 | 1.10 | 2.91 | 11.7 s | 1.80 |
-| 3.0（上限） | 0.58/0.69/0.40 | 1.76 | 0.73 | 1.94 | 9.5 s | 2.69 |
+SETTLE / GOTO_PICK / DESCEND / GRASP 等物理或稳定等待不按这个倍率缩放。每段缩放后仍受 `PICK_SEGMENT_MIN_TIME=0.40 s` 下限保护。
 
 **机制**：`scale_segment_times(durations, scale, min_time)`（`manip_common/interpolation.py`）把每段时长除以倍率。**均匀时间缩放不改关节空间曲线**，只把每个速度乘以倍率 —— 所以 URDF-viz 里确认过的姿态、`monotone_cubic_hermite` 的连续性、不越界性质全部原样成立。状态机在 `__init__` 里一次性算好 `_joint_segment_times / _return_segment_times / _lift_time / _wp_lead_in_time`，轨迹和超时判定共用同一套数，不会出现"超时先于轨迹完成触发"。
 
 **为什么 DESCEND / GRASP 不缩放**：DESCEND 是锁 XY 只落 Z 的 DiffIK 段，压快会让 TCP 跟不上，`_start_grasp` 冻结的实际 Z 就偏高 → 抓空；GRASP 是夹爪闭合的物理时间，和轨迹无关。SETTLE / GOTO_PICK / CARRY / HOLD 是平衡策略的稳定等待，同理不动。
 
-**上限依据**：`_slew_arm` 每步把关节增量截断在 `ARM_SLEW_RAD = 0.080 rad`，控制周期 `dt = 4 × 0.005 = 0.02 s`，所以下发速度天花板是 **4.0 rad/s**。加入05后 `smooth_v1` 正/逆原速总峰值 `0.898 rad/s`（正向0.887、逆向0.898），约 **4.45× 处轨迹才开始被截断变形**。`PICK_SPEED_MAX = 3.0` 留了余量，另一半原因是件只靠垫面摩擦夹着，LIFT / RETURN_HOME 太快会甩脱。
+**上限依据**：`_slew_arm` 每步把关节增量截断在 `ARM_SLEW_RAD = 0.080 rad`，控制周期 `dt = 4 × 0.005 = 0.02 s`，所以下发速度天花板是 **4.0 rad/s**。2026-08-24 路径 authored 峰值为正向 `0.887 rad/s`、逆向 `0.734 rad/s`；默认 1.5× 的逆向峰值约 `1.10 rad/s`，仍有足够余量。另一半限制来自产品只靠垫面摩擦夹持，LIFT / RETURN_HOME 太快仍可能甩脱。
 
 **调法**：`--ces_pick_speed 2.0` 等。启动日志打印 `arm_speed=x1.50` 和 `seg_s=1.17/1.38/0.80 (authored 1.75/2.07/1.20)`。**如果提速后掉件或抓偏，先降的是这个倍率，不要动路点 q。**
 
-- **待办：1.5× + 新05 的物理验收**。重点看10→20是否蹭抽屉、40(live)→30是否跳变、10停稳后收到05时产品是否碰胸/滑动、walk时胸前持物是否扰动平衡。CPU 侧只证明了“清单正确、曲线不越界、峰值速度仍在限幅内”。
+- **待办：1.5× + 新05 的物理验收**。重点看40(live)→30是否跳变、30→20是否真正把产品带离抽屉边缘、20→05时产品是否碰胸/滑动、walk时新贴胸持物姿态是否扰动平衡。CPU 侧只证明“清单正确、曲线不越界、峰值速度仍在限幅内”。
 
 ### 姿态调优 V2（历史已完成，可回退）
 
@@ -594,32 +585,40 @@ AABB Y 比 `PRODUCT_POS` 偏 −11 mm。夹爪闭合、站稳、抬臂完成；l
 
 ---
 
-## 11. 下一阶段：优化 place 动作（2026-08-19 起）
+## 11. Place：人工 05→15 + Unitree 纯 Z 补偿（2026-08-24）
 
-### 11.1 现状与问题
+### 11.1 已确认的关节路径
 
-放置现在走的是**DiffIK + 笛卡尔插补**：`_begin_place_approach` 铺一条两段路径 `[当前TCP → 贴身抬到放置高度 → 水平伸到灰筐上方]`，只跟位置不给朝向目标，靠 `_place_joint_window` 的关节窗口约束姿态。
-
-问题：**IK 为了凑 TCP 位置会让肩/腕大角度乱转**，关节姿态和旋转角度都很大。位置窗口只能限住范围，限不住"怎么转过去"。
-
-### 11.2 计划：改成写死的关节姿态点
-
-和 pick 一样的做法（当前默认 `ces_pick_smooth_v1`）：用 URDF-viz 手工设计几个放置姿态点，存成 JSON，关节空间连续插补回放，不让 IK 自由发挥。
-
-- 复用现成机制：`pose_library.py` + `poses/<set>/trajectory_manifest.json`，按**关节名**匹配，不改 DDS 下标。
-- 参考 pick 的经验：路点之间 `dmax` 别太大；可用 `monotone_cubic_hermite` 连续穿过中间点，但仍必须做碰撞验证。腕三轴在最后一段最好不动（pick 的 40 就是三个腕关节与 30 完全相同）；最后一个点只作 `q_ref`、不硬下发。
-- 交接点仍要留给 IK：pick 是 30 之后锁 XY 只落 Z。放置同理，可以关节路点走到灰筐上方，最后的高度微调再交给 IK。
-
-### 11.3 place 的几何约束（设计姿态点时要满足）
+Place 只保留两个人工关节姿态，不使用 25：
 
 ```text
-放置站骨盆    ≈ (-2.267, -0.772, 0.755)，yaw = π/2（正对桌子）
-灰筐中心      = PLACE_TARGET_XY ≈ (-2.087, -0.312)
-放置高度      PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.08
-设计前伸      X_B_PLACE = 0.46 m（骨盆系 +前），Y_B_PLACE = -0.18（右）
+05_chest_carry = (-0.75999993, -0.26, +0.58, -0.68999976, -0.34, -0.05000001, +0.08999996)
+15_place_forward_release = (-1.2466918, -0.37189797, +1.6931672, +0.7598856, +0.23724373, +0.10550016, +1.0793102)
 ```
 
-- **不要贴桌 IK**：`PLACE_Z` 过低会让 TCP/垫面磕桌面，DiffIK 在接触区振荡、腕剧抖。停在灰筐沿上方约 8 cm 松爪自由落下。
-- **抬臂段要"贴身"先升高**再水平伸出（`PLACE_RAISE_FORWARD=0.06`），否则肘会死折。件也不能被拖着扫过桌面。
-- **手臂前伸量不是固定的**：walk 到站会停短 `along`，实际要伸 `0.46 + along`。所以关节姿态点最好按几个前伸档位准备，或者末端留一段 IK 微调。等 §6.4 把 `coast` 收紧后这个范围会变窄。
-- 夹爪全程 `GRIPPER_CLOSED`，靠垫面摩擦；`RELEASE` 才张开。
+15 源自 `urdf_pose_toolkit/poses/ces_place_from_05_v1/15_forward_extend_draft.json` 的用户人工保存值，URDF 最小关节限位余量 `0.5351 rad`。正式文件为 `action_provider/ces_grasp/poses/ces_pick_smooth_v1/15_place_forward_release.json`。
+
+`trajectory_manifest.json::place_path` 定义 `05→15`，原始时长 `3.2 s`、`segment_smoothstep` 起止停稳；默认 1.5× 后约 `2.13 s`。snap 换站不再先走旧 `PLACE_PRE_RAISE_Q`，而是保持胸前 05 到放置站后再执行 05→15。
+
+### 11.2 15 后的纯 Z IK 交接
+
+15 到位后的下一个控制周期才读取 Unitree 真实 TCP，避免读取到上一帧尚未执行完的 q。目标规则：
+
+```text
+goal.x = live_tcp_after_15.x
+goal.y = live_tcp_after_15.y
+goal.z = min(live_tcp_after_15.z, PLACE_FINAL_TCP_Z)
+PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.020
+```
+
+- X/Y 完全取 15 到位后的实时值，不再追 `PLACE_TARGET_XY`，walk 停位误差不会触发手臂横向补偿。
+- Z 使用现有 `CartesianInterpolator` smoothstep 插补，状态机继续通过位置 IK 跟踪；不给朝向目标，零空间参考保持 pose 15。
+- “只降不升”：如果真实 15 已经低于目标 Z，则目标等于当前 Z，不反向抬手，也不继续向下压。
+- 初始目标是灰筐上沿上方 `20 mm`。只在阿里云 Isaac Sim 看清产品底面、指垫和筐沿后调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要用 URDF 代理值冒充真 TCP 验收。
+- RELEASE 后先逆向回到 15，再回胸前 05；夹持阶段含 Z 下降全程保持 `GRIPPER_CLOSED`。
+
+### 11.3 验证边界
+
+44 项 CPU 合约测试通过，覆盖清单加载、05/15 q、05→15 smoothstep、纯 Z 目标保持 X/Y且绝不抬升，以及既有 Pick/Return/Walk 合约。Python 编译和 JSON 解析通过。
+
+尚未在本机完成 Isaac 物理验收。阿里云复测必须观察：05→15 持物扫掠是否碰胸/桌沿、15 实际 TCP 世界坐标、Z 下降量、产品底面是否碰筐沿、松爪后是否落入灰筐，以及回撤 `release→15→05` 是否安全。

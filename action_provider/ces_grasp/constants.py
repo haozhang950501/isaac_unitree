@@ -65,8 +65,11 @@ GRASP_SHIFT_Y = 0.0
 PRODUCT_HALF_Z = 0.01275
 GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
-# 放置：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
+# 旧 Place 回退：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
 PLACE_RELEASE_ABOVE_TABLE = 0.08
+# 新 05→15 Place：15 已经人工确定 X/Y，末段只做向下补偿。初始目标让 TCP
+# 停在灰筐上沿 20 mm；这是阿里云实测前的保守可调值，避免直接 IK 到桌面。
+PLACE_FINAL_TCP_ABOVE_TRAY = 0.020
 
 # 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
 # _apply_snap 每帧把骨盆写成 STAND_PELVIS_Z、速度清零，所以 is_standing()
@@ -90,16 +93,17 @@ GRASP_POS_TOL = 0.055
 GRASP_WAIT_MAX = 0.6
 LIFT_TIME = 2.2
 # 旧清单回退：抬起后先从实时 q 过渡到第一个逆向路点。smooth_v1 已把同一
-# 0.8 s 写进 manifest 的 40(live)→30 return segment，随后从30直达胸前05。
+# 0.8 s 写进 manifest 的 40(live)→30 return segment，随后走30→20→05避开抽屉边缘。
 RETURN_LEAD_IN_TIME = 0.8
 RETURN_TIME = 2.5  # 无关节路点时：单段回默认臂姿
 CARRY_TIME = 0.6  # 冻臂 q，不要再笛卡尔收臂（件会掉）
 HOLD_TIME = 0.3
-# snap 换站前先在抓取站把件抬过桌面高度，避免垂臂瞬移嵌进桌沿。
+# 旧清单回退：snap 换站前先在抓取站把件抬过桌面高度。Smooth V1 的新
+# Place 清单保持胸前 05 直接换站，到站后再走人工 05→15，不使用这个常量。
 # q：肩俯仰上抬、肘略收、roll/yaw/腕贴 00，避免外翻和大腕旋。
 PLACE_PRE_RAISE_Q = (-0.60, -0.20, 0.00, 1.15, 0.00, 0.00, 0.00)
 PLACE_PRE_RAISE_TIME = 1.6
-# 放置：从抬臂姿态先升到放置高度（贴身、只往前挪一点），再水平伸到灰筐上方。
+# 旧清单回退：从抬臂姿态先升到放置高度，再水平伸到灰筐上方。
 PLACE_RAISE_FORWARD = 0.06  # 抬臂段顺机体前方挪一点，避免死折肘
 PLACE_RAISE_TIME = 1.6
 PLACE_REACH_TIME = 2.2
@@ -110,7 +114,7 @@ PLACE_ROLL_WINDOW = 0.45
 PLACE_YAW_WINDOW = 0.50
 PLACE_WRIST_WINDOW = 0.30
 PLACE_ELBOW_MIN = 0.20  # 肘不许伸直锁死
-PLACE_DESCEND_TIME = 0.0  # 跳过：悬停松爪，件自由落下
+PLACE_DESCEND_TIME = 1.2
 RELEASE_TIME = 0.8
 # 收臂：按放置轨迹的逆序（灰筐上方 → 抬臂点 → 携带姿态），别横扫桌沿。
 RETRACT_TIME = 1.6
@@ -166,8 +170,9 @@ WALK_TURN_MAX_DRIFT = 0.70  # 转弧走了这么远还没转到位 = 策略没�
 # 指令归零后策略还会多走一点：提前 stop_margin 松"油门"。
 # 若实测停不到位（走过头撞桌 / 差太多够不到灰筐），只调这两个值。
 WALK_STOP_MARGIN = 0.15
-# 最后一段：宁可停短，绝不许过。放置站骨盆离桌沿只有约 12 cm，走过头直接撞桌；
-# 而放置 IK 的目标是**世界**灰筐中心（见 _place_drop_pos），停短了手臂会自己多伸。
+# 最后一段：宁可停短，绝不许过。放置站骨盆离桌沿只有约 12 cm，走过头直接撞桌。
+# 新 Place 不再追世界灰筐中心：05→15 后只落 Z，所以停位 XY 误差不会由手臂补偿；
+# 用户明确接受不设 TCP X/Y 目标，安全上仍以不越过桌沿为第一优先级。
 # 0.20 撞过桌：`vx=0.45` 松手后滑行约 0.25 m，比余量还大，到 0.20 才停必然冲过去。
 # 又因为 `vx` 不能降到死区以下（低了根本不迈步），没法缓刹，只能提前松手。
 # 取 0.30 ≈ 滑行量：滑行 0.10~0.30 时落点在放置站前 0.20~0.00，**不会越过站点**。
@@ -256,7 +261,11 @@ PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = PLACE_TRAY_CENTER_XY
 _PLACE_STAND_FROM_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
 PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
+# 旧清单的世界 XY+Z 目标；Smooth V1 不再追这个 XY。
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
+# Smooth V1 在 15 到位后锁住实时 TCP X/Y，只向下逼近这个世界 Z。若 15 已经
+# 低于该高度，状态机不会反向抬升，也不会继续向下压。
+PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_FINAL_TCP_ABOVE_TRAY
 
 # HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
 # ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）

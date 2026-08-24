@@ -18,7 +18,8 @@
     "20_right_shift_wrist_down.json",
     "30_pre_grasp_vertical.json",
     "40_grasp_posture_ref.json",
-    "05_chest_carry.json"
+    "05_chest_carry.json",
+    "15_place_forward_release.json"
   ],
   "preview_pose_files": [
     "00_ready.json",
@@ -82,10 +83,12 @@
     "logical_waypoints": [
       "40_grasp_posture_ref",
       "30_pre_grasp_vertical",
+      "20_right_shift_wrist_down",
       "05_chest_carry"
     ],
     "commanded_waypoints": [
       "30_pre_grasp_vertical",
+      "20_right_shift_wrist_down",
       "05_chest_carry"
     ],
     "start_policy": "use_live_post_lift_q_as_40_phase; never hard-command authored q_ref pose 40",
@@ -98,13 +101,49 @@
       },
       {
         "from": "30_pre_grasp_vertical",
+        "to": "20_right_shift_wrist_down",
+        "duration_s": 1.2,
+        "runtime_control": "joint_space_drawer_clearance"
+      },
+      {
+        "from": "20_right_shift_wrist_down",
         "to": "05_chest_carry",
         "duration_s": 3.0,
-        "runtime_control": "direct_joint_space"
+        "runtime_control": "joint_space_to_carry"
+      }
+    ],
+    "interpolation": "monotone_cubic_hermite",
+    "final_role": "carry_posture"
+  },
+  "place_path": {
+    "logical_waypoints": [
+      "05_chest_carry",
+      "15_place_forward_release"
+    ],
+    "commanded_waypoints": [
+      "15_place_forward_release"
+    ],
+    "start_policy": "use live carry q at the approved 05 posture; do not replace it with the old pre-place raise constant",
+    "segments": [
+      {
+        "from": "05_chest_carry",
+        "to": "15_place_forward_release",
+        "duration_s": 3.2,
+        "runtime_control": "joint_space"
       }
     ],
     "interpolation": "segment_smoothstep",
-    "final_role": "carry_posture"
+    "vertical_compensation": {
+      "runtime_control": "cartesian_position_only_ik",
+      "xy_policy": "hold_live_tcp_xy_after_15",
+      "z_policy": "descend_only_to_scene_tray_clearance",
+      "target_constant": "PLACE_FINAL_TCP_Z",
+      "target_clearance_above_tray_m": 0.02,
+      "orientation_target": null,
+      "q_ref": "15_place_forward_release",
+      "duration_s": 1.2
+    },
+    "final_role": "release_posture_after_z_only_ik"
   },
   "planning": {
     "removed_as_redundant": [
@@ -136,39 +175,56 @@
       "violations": [],
       "commanded_waypoints": [
         "30_pre_grasp_vertical",
+        "20_right_shift_wrist_down",
         "05_chest_carry"
       ],
       "interior_speed_norm_rad_s": [
-        0.0
+        0.594605823
       ],
-      "pose_30_is_direct_retraction_rest": true,
-      "direct_30_to_05": true,
-      "interpolation": "segment_smoothstep",
+      "pose_20_is_drawer_clearance_waypoint": true,
+      "via_20_to_05": true,
+      "interpolation": "monotone_cubic_hermite",
       "max_abs_velocity_by_joint_rad_s": [
-        0.511319437,
-        0.648830812,
-        0.50587187,
-        1.068642188,
-        0.035627625,
-        0.026542285,
-        0.36790018
+        0.234815438,
+        0.5995,
+        0.364469901,
+        0.551692784,
+        0.545319062,
+        0.057605712,
+        0.733543361
       ],
-      "max_abs_velocity_rad_s": 1.068642188,
+      "max_abs_velocity_rad_s": 0.733543361,
       "default_speed_scale": 1.5,
-      "direct_30_to_05_runtime_duration_s": 2.0,
-      "default_scaled_max_abs_velocity_rad_s": 1.602963281
+      "authored_30_to_20_to_05_duration_s": 4.2,
+      "default_30_to_20_to_05_runtime_duration_s": 2.8,
+      "default_scaled_max_abs_velocity_rad_s": 1.100315041
+    },
+    "place_path": {
+      "validation_passed": true,
+      "violations": [],
+      "commanded_waypoints": [
+        "15_place_forward_release"
+      ],
+      "pose_05_is_exact_carry_start": true,
+      "pose_25_removed": true,
+      "joint_interpolation": "segment_smoothstep",
+      "authored_05_to_15_duration_s": 3.2,
+      "max_abs_joint_delta_rad": 1.44988536,
+      "min_joint_limit_margin_rad": 0.535119358,
+      "final_xy_policy": "hold_live_tcp_xy_after_15",
+      "final_z_control": "cartesian_position_only_ik"
     },
     "max_abs_velocity_by_joint_rad_s": [
       0.818569837,
       0.88722353,
       0.595537955,
-      1.068642188,
+      0.60034,
       0.545319062,
       0.057605712,
       0.756958979
     ],
-    "max_abs_velocity_rad_s": 1.068642188,
+    "max_abs_velocity_rad_s": 0.88722353,
     "min_joint_limit_margin_rad": 0.148629358
   },
-  "generated_at": "2026-08-23T09:34:14+08:00"
+  "generated_at": "2026-08-24T14:10:50+08:00"
 }

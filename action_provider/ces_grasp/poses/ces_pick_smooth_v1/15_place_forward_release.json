@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "15_place_forward_release",
+  "unit": "rad",
+  "joint_order": [
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "q": [
+    -1.2466918,
+    -0.37189797,
+    1.6931672,
+    0.7598856,
+    0.23724373,
+    0.10550016,
+    1.0793102
+  ],
+  "purpose": "User-authored Place pose 15. Unitree commands 05 -> 15 in joint space, then holds the live TCP X/Y and uses position-only IK for the final Z-only descent.",
+  "control_role": "place_joint_space_endpoint_before_vertical_ik",
+  "unitree_arm_q_allowed": true,
+  "source": "manual_urdf_viz_capture",
+  "source_pose": "urdf_pose_toolkit/poses/ces_place_from_05_v1/15_forward_extend_draft.json",
+  "captured_at": "2026-08-24T13:46:56+08:00",
+  "palm_position_in_pelvis_m": [
+    0.32230326,
+    -0.070391194,
+    0.11225533
+  ],
+  "tcp_proxy_position_in_pelvis_m": [
+    0.314731472,
+    -0.065036445,
+    -0.002370124
+  ],
+  "validation": {
+    "joint_limit_margin_rad": [
+      1.8425082,
+      1.87960203,
+      0.9248328,
+      1.3345144,
+      1.734978324,
+      1.508929398,
+      0.535119358
+    ],
+    "min_joint_limit_margin_rad": 0.535119358,
+    "joint_limit_violations": []
+  },
+  "validation_boundary": "URDF-viz kinematic authoring only; final Z target, product clearance, collisions, friction, and release require Isaac Sim acceptance."
+}

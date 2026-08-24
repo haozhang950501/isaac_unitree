@@ -32,8 +32,10 @@ JOINT_POSES = [
 ]
 Q_REF_POSE = "40_grasp_posture_ref"
 RETURN_POSE = "05_chest_carry"
+PLACE_POSE = "15_place_forward_release"
 RETURN_COMMANDED_POSES = [
     "30_pre_grasp_vertical",
+    "20_right_shift_wrist_down",
     RETURN_POSE,
 ]
 
@@ -73,7 +75,10 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "ces_pick_smooth_v1")
         self.assertEqual(
             manifest["pose_files"],
-            [f"{name}.json" for name in [*JOINT_POSES, Q_REF_POSE, RETURN_POSE]],
+            [
+                f"{name}.json"
+                for name in [*JOINT_POSES, Q_REF_POSE, RETURN_POSE, PLACE_POSE]
+            ],
         )
         self.assertNotIn("05_forward_reach.json", manifest["pose_files"])
         self.assertNotIn("25_pre_grasp_xy_aligned.json", manifest["pose_files"])
@@ -104,14 +109,38 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertIn("never hard-command", return_path["start_policy"])
         self.assertEqual(
             [float(segment["duration_s"]) for segment in return_path["segments"]],
-            [0.8, 3.0],
+            [0.8, 1.2, 3.0],
         )
-        self.assertEqual(return_path["interpolation"], "segment_smoothstep")
+        self.assertEqual(return_path["interpolation"], "monotone_cubic_hermite")
         return_validation = manifest["validation"]["return_path"]
         self.assertTrue(return_validation["validation_passed"])
-        self.assertTrue(return_validation["pose_30_is_direct_retraction_rest"])
-        self.assertTrue(return_validation["direct_30_to_05"])
-        self.assertLess(return_validation["max_abs_velocity_rad_s"], 1.1)
+        self.assertTrue(return_validation["pose_20_is_drawer_clearance_waypoint"])
+        self.assertTrue(return_validation["via_20_to_05"])
+        self.assertLess(return_validation["max_abs_velocity_rad_s"], 0.8)
+        place_path = manifest["place_path"]
+        self.assertEqual(
+            place_path["logical_waypoints"], [RETURN_POSE, PLACE_POSE]
+        )
+        self.assertEqual(place_path["commanded_waypoints"], [PLACE_POSE])
+        self.assertEqual(place_path["interpolation"], "segment_smoothstep")
+        self.assertEqual(
+            [float(segment["duration_s"]) for segment in place_path["segments"]],
+            [3.2],
+        )
+        vertical = place_path["vertical_compensation"]
+        self.assertEqual(vertical["runtime_control"], "cartesian_position_only_ik")
+        self.assertEqual(vertical["xy_policy"], "hold_live_tcp_xy_after_15")
+        self.assertEqual(
+            vertical["z_policy"], "descend_only_to_scene_tray_clearance"
+        )
+        self.assertIsNone(vertical["orientation_target"])
+        self.assertEqual(vertical["q_ref"], PLACE_POSE)
+        self.assertEqual(float(vertical["target_clearance_above_tray_m"]), 0.02)
+        self.assertGreater(float(vertical["duration_s"]), 0.0)
+        place_validation = manifest["validation"]["place_path"]
+        self.assertTrue(place_validation["validation_passed"])
+        self.assertTrue(place_validation["pose_05_is_exact_carry_start"])
+        self.assertTrue(place_validation["pose_25_removed"])
 
     def test_selected_waypoint_q_values_match_natural_v2(self):
         for name in [*JOINT_POSES, Q_REF_POSE]:
@@ -129,9 +158,25 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertTrue(q05["unitree_arm_q_allowed"])
         self.assertEqual(
             q05["q"],
-            [-0.7999999, -0.24, 0.59999996, 0.09000012, 0.36, -0.13, 0.72999984],
+            [-0.75999993, -0.26, 0.58, -0.68999976, -0.34, -0.05000001, 0.08999996],
         )
         self.assertGreater(q05["validation"]["min_joint_limit_margin_rad"], 0.1)
+        q15 = read_json(SMOOTH_DIR / f"{PLACE_POSE}.json")
+        self.assertEqual(q15["control_role"], "place_joint_space_endpoint_before_vertical_ik")
+        self.assertTrue(q15["unitree_arm_q_allowed"])
+        self.assertEqual(
+            q15["q"],
+            [
+                -1.2466918,
+                -0.37189797,
+                1.6931672,
+                0.7598856,
+                0.23724373,
+                0.10550016,
+                1.0793102,
+            ],
+        )
+        self.assertGreater(q15["validation"]["min_joint_limit_margin_rad"], 0.5)
 
     def test_pose_library_loads_runtime_sequence(self):
         action_provider_package = types.ModuleType("action_provider")
@@ -161,11 +206,18 @@ class SmoothPickManifestTests(unittest.TestCase):
             waypoint_set.return_waypoints, tuple(RETURN_COMMANDED_POSES)
         )
         self.assertEqual(
-            waypoint_set.return_segment_durations, (0.8, 3.0)
+            waypoint_set.return_segment_durations, (0.8, 1.2, 3.0)
         )
         self.assertEqual(
-            waypoint_set.return_interpolation_method, "segment_smoothstep"
+            waypoint_set.return_interpolation_method, "monotone_cubic_hermite"
         )
+        self.assertEqual(waypoint_set.place_start, RETURN_POSE)
+        self.assertEqual(waypoint_set.place_waypoints, (PLACE_POSE,))
+        self.assertEqual(waypoint_set.place_segment_durations, (3.2,))
+        self.assertEqual(
+            waypoint_set.place_interpolation_method, "segment_smoothstep"
+        )
+        self.assertEqual(waypoint_set.place_descend_duration, 1.2)
         self.assertEqual(
             waypoint_set.interpolation_method, "monotone_cubic_hermite"
         )
@@ -179,6 +231,36 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertEqual(
             natural_v2.return_interpolation_method,
             natural_v2.interpolation_method,
+        )
+        self.assertEqual(natural_v2.place_start, "")
+        self.assertEqual(natural_v2.place_waypoints, ())
+        self.assertEqual(natural_v2.place_segment_durations, ())
+        self.assertEqual(natural_v2.place_descend_duration, 0.0)
+
+
+class PlacePathTests(unittest.TestCase):
+    def test_05_to_15_smoothstep_hits_both_approved_q_values(self):
+        module = load_interpolation_module()
+        q05 = fake_tensor(read_json(SMOOTH_DIR / f"{RETURN_POSE}.json")["q"])
+        q15 = fake_tensor(read_json(SMOOTH_DIR / f"{PLACE_POSE}.json")["q"])
+        interpolator = module.JointSpaceInterpolator("cpu")
+        interpolator.reset(q05, q15, 3.2, method="segment_smoothstep")
+        np.testing.assert_allclose(interpolator.step(0.0), q05, atol=1e-9)
+        interpolator.elapsed = interpolator.duration
+        np.testing.assert_allclose(interpolator.step(0.0), q15, atol=1e-9)
+
+    def test_z_only_goal_keeps_live_xy_and_never_raises(self):
+        path = ROOT / "action_provider" / "ces_grasp" / "place_policy.py"
+        spec = importlib.util.spec_from_file_location("ces_place_policy_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(
+            module.z_only_descend_goal((1.2, -0.7, 0.9), 0.8),
+            (1.2, -0.7, 0.8),
+        )
+        self.assertEqual(
+            module.z_only_descend_goal((1.2, -0.7, 0.75), 0.8),
+            (1.2, -0.7, 0.75),
         )
 
 
@@ -240,9 +322,9 @@ class SmoothJointInterpolatorTests(unittest.TestCase):
 
 
 class SmoothReturnInterpolatorTests(SmoothJointInterpolatorTests):
-    """The authored direct 30->05 return must stay smooth and bounded."""
+    """The authored 30->20->05 return must stay smooth and bounded."""
 
-    INTERPOLATION_METHOD = "segment_smoothstep"
+    INTERPOLATION_METHOD = "monotone_cubic_hermite"
 
     @classmethod
     def setUpClass(cls):
@@ -259,24 +341,15 @@ class SmoothReturnInterpolatorTests(SmoothJointInterpolatorTests):
         ]
 
     def test_interior_velocity_is_continuous_and_nonzero(self):
-        """The direct segment rests at 30 and 05 while moving between them."""
+        """Pose 20 is crossed continuously without skipping the clearance q."""
         interpolator = self.make_interpolator()
         epsilon = 1e-4
-        start_rate = (
-            self.sample(interpolator, epsilon) - self.sample(interpolator, 0.0)
-        ) / epsilon
-        end_rate = (
-            self.sample(interpolator, interpolator.duration)
-            - self.sample(interpolator, interpolator.duration - epsilon)
-        ) / epsilon
-        midpoint = 0.5 * interpolator.duration
-        midpoint_rate = (
-            self.sample(interpolator, midpoint + epsilon)
-            - self.sample(interpolator, midpoint - epsilon)
-        ) / (2.0 * epsilon)
-        self.assertLess(float(np.abs(start_rate).max()), 0.01)
-        self.assertLess(float(np.abs(end_rate).max()), 0.01)
-        self.assertGreater(float(np.linalg.norm(midpoint_rate)), 0.1)
+        bound = interpolator.bounds[0]
+        at = self.sample(interpolator, bound)
+        left = (at - self.sample(interpolator, bound - epsilon)) / epsilon
+        right = (self.sample(interpolator, bound + epsilon) - at) / epsilon
+        np.testing.assert_allclose(left, right, atol=5e-4)
+        self.assertGreater(float(np.linalg.norm(left)), 0.05)
 
     def test_max_speed_return_stays_under_the_slew_clamp(self):
         interpolator = self.module.JointSpaceInterpolator("cpu")

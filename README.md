@@ -235,15 +235,28 @@ python sim_main.py \
 `00 -> 10 -> 20 -> 30`. Pose 40 remains a dynamic null-space reference for
 the Cartesian grasp descent and is never hard-commanded as an arm pose. After
 lifting, the reverse return uses the live post-lift joint state as phase 40,
-settles at pose 30, then moves directly to the user-authored pose 05 in front
-of the chest: `40(live) -> 30 -> 05`. At the default `1.5` speed scale, the
-authored 3-second `30 -> 05` leg plays in 2 seconds. The older
+returns to pose 30, passes through pose 20 to clear the drawer edge, and then
+moves to the newly user-authored pose 05 in front of the chest:
+`40(live) -> 30 -> 20 -> 05`. The authored segment times are
+`0.8 / 1.2 / 3.0` seconds, or about `0.53 / 0.80 / 2.00` seconds at the
+default `1.5` speed scale. The older
 `ces_pick_natural_v1` and `ces_pick_natural_v2` sets retain their compatible
 return-to-00 behavior.
 
-The direct return has been approved in the local URDF preview and covered by
-CPU contract tests. Product clearance, grip friction, and walking balance must
-still be accepted in Isaac Sim.
+The same Smooth V1 manifest now owns the approved Place handoff. The product
+stays in pose 05 while changing stations, then Unitree commands the
+user-authored joint path `05 -> 15_place_forward_release` with a 3.2-second
+segment smoothstep (about 2.13 seconds at the default 1.5 speed scale). At pose
+15 the runtime reads the actual TCP, preserves that live X/Y exactly, and uses
+the existing Cartesian interpolator plus position-only IK to descend only Z.
+It does not target the tote-center X/Y or an orientation, and pose 25 is not
+part of the runtime path. The initial Z target is 20 mm above the tote rim;
+if the live pose 15 is already lower, the descend-only policy does not raise or
+push it farther down.
+
+The return via pose 20 and the Place 05-to-15 contract are covered by CPU
+tests. Product clearance, final Z clearance, grip friction, release, and
+walking balance must still be accepted in Isaac Sim.
 
 #### 2.4.3 Data Replay
 

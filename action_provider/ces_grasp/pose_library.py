@@ -32,6 +32,11 @@ class CesWaypointSet:
     return_waypoints: tuple[str, ...]
     return_segment_durations: tuple[float, ...]
     return_interpolation_method: str
+    place_start: str
+    place_waypoints: tuple[str, ...]
+    place_segment_durations: tuple[float, ...]
+    place_interpolation_method: str
+    place_descend_duration: float
     interpolation_method: str
 
 
@@ -161,6 +166,98 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
             *reversed(joint_durations),
         ]
 
+    place_spec = manifest.get("place_path")
+    place_start = ""
+    place_waypoints: tuple[str, ...] = ()
+    place_durations: list[float] = []
+    place_interpolation_method = interpolation_method
+    place_descend_duration = 0.0
+    if place_spec is not None:
+        if not isinstance(place_spec, dict):
+            raise ValueError(f"waypoint set {set_name} place_path must be an object")
+        place_interpolation_method = str(
+            place_spec.get("interpolation", "segment_smoothstep")
+        )
+        if place_interpolation_method not in _INTERPOLATION_METHODS:
+            raise ValueError(
+                f"waypoint set {set_name} place_path uses unsupported interpolation "
+                f"{place_interpolation_method!r}"
+            )
+        logical_place = tuple(
+            str(value) for value in place_spec.get("logical_waypoints", [])
+        )
+        place_waypoints = tuple(
+            str(value) for value in place_spec.get("commanded_waypoints", [])
+        )
+        if len(logical_place) < 2 or logical_place[1:] != place_waypoints:
+            raise ValueError(
+                f"waypoint set {set_name} place_path must be "
+                "logical_start + commanded_waypoints"
+            )
+        place_start = logical_place[0]
+        expected_src = place_start
+        place_segments = list(place_spec.get("segments", []))
+        if len(place_segments) != len(place_waypoints):
+            raise ValueError(
+                f"waypoint set {set_name} place_path has {len(place_segments)} "
+                f"segments for {len(place_waypoints)} commanded waypoints"
+            )
+        for index, segment in enumerate(place_segments):
+            src = str(segment["from"])
+            dst = str(segment["to"])
+            duration = float(segment["duration_s"])
+            if src != expected_src or dst != place_waypoints[index]:
+                raise ValueError(
+                    f"place segment {src}->{dst} does not match expected "
+                    f"{expected_src}->{place_waypoints[index]}"
+                )
+            if str(segment.get("runtime_control")) != _JOINT_SPACE:
+                raise ValueError(
+                    f"place segment {src}->{dst} must use {_JOINT_SPACE} control"
+                )
+            if duration <= 0.0:
+                raise ValueError(f"place segment {src}->{dst} duration must be positive")
+            place_durations.append(duration)
+            expected_src = dst
+
+        vertical = place_spec.get("vertical_compensation")
+        if not isinstance(vertical, dict):
+            raise ValueError(
+                f"waypoint set {set_name} place_path needs vertical_compensation"
+            )
+        expected_vertical = {
+            "runtime_control": "cartesian_position_only_ik",
+            "xy_policy": "hold_live_tcp_xy_after_15",
+            "z_policy": "descend_only_to_scene_tray_clearance",
+        }
+        for key, expected in expected_vertical.items():
+            actual = str(vertical.get(key, ""))
+            if actual != expected:
+                raise ValueError(
+                    f"waypoint set {set_name} vertical_compensation {key} "
+                    f"must be {expected!r}, got {actual!r}"
+                )
+        if str(vertical.get("target_constant", "")) != "PLACE_FINAL_TCP_Z":
+            raise ValueError(
+                f"waypoint set {set_name} vertical compensation must target "
+                "PLACE_FINAL_TCP_Z"
+            )
+        if vertical.get("orientation_target") is not None:
+            raise ValueError(
+                f"waypoint set {set_name} vertical compensation must be position-only"
+            )
+        expected_q_ref = place_waypoints[-1] if place_waypoints else ""
+        if str(vertical.get("q_ref", "")) != expected_q_ref:
+            raise ValueError(
+                f"waypoint set {set_name} vertical compensation q_ref must be "
+                f"{expected_q_ref!r}"
+            )
+        place_descend_duration = float(vertical.get("duration_s", 0.0))
+        if place_descend_duration <= 0.0:
+            raise ValueError(
+                f"waypoint set {set_name} vertical compensation duration must be positive"
+            )
+
     if handoff and joint_waypoints and joint_waypoints[-1] != handoff:
         raise ValueError(
             f"joint-space path ends at {joint_waypoints[-1]}, expected handoff {handoff}"
@@ -170,6 +267,11 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
             f"waypoint set {set_name} return starts at {return_start}, "
             f"expected q_ref phase {q_ref_to}"
         )
+    if place_start and return_waypoints and place_start != return_waypoints[-1]:
+        raise ValueError(
+            f"waypoint set {set_name} place starts at {place_start}, "
+            f"expected carry endpoint {return_waypoints[-1]}"
+        )
     missing_wp = [
         n
         for n in [
@@ -178,6 +280,8 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
             q_ref_to,
             return_start,
             *return_waypoints,
+            place_start,
+            *place_waypoints,
         ]
         if n and n not in q_by_name
     ]
@@ -201,5 +305,10 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
         return_waypoints=tuple(return_waypoints),
         return_segment_durations=tuple(return_durations),
         return_interpolation_method=return_interpolation_method,
+        place_start=place_start,
+        place_waypoints=place_waypoints,
+        place_segment_durations=tuple(place_durations),
+        place_interpolation_method=place_interpolation_method,
+        place_descend_duration=place_descend_duration,
         interpolation_method=interpolation_method,
     )
