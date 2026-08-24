@@ -50,6 +50,10 @@ class WalkGait:
     finishing the turn, the leg flips that translation and retries at ``wz_max``
     to walk the drift back off.
 
+    ``turn_preview`` starts the yaw command this far before the reverse target
+    so ``wz`` is already ramping when the arc begins (otherwise the robot
+    keeps backing in +X and only rotates late).
+
     ``lateral_arrive`` / ``yaw_arrive`` are how square to the goal a
     ``lateral_first`` leg wants to end up.  They are **reported, not enforced**:
     the stop line always wins, so missing them shows up as ``on_target=False``
@@ -67,8 +71,10 @@ class WalkGait:
     leg_settle: float
     height: float = 0.8
     turn_vx: float = 0.0
+    reverse_vx: float = 0.0
     wz_max: float | None = None
     turn_max_drift: float = 0.0
+    turn_preview: float = 0.0
     lateral_arrive: float = 0.0
     yaw_arrive: float = 0.0
 
@@ -96,6 +102,9 @@ class WalkLeg:
     stop_margin: float | None = None
     settle_before: float | None = None
     lateral_first: bool = False
+    # After the CES right turn: walk the travel axis only (body +vx = world +Y).
+    # Do not strafe (vy) or reverse-realign (-vx) to fix leftover world X.
+    along_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,7 +211,7 @@ def build_carry_route(
         WalkLeg(
             "approach_place", "forward", place_yaw, place_xy,
             stop_margin=place_stop_margin, lateral_first=True,
-            settle_before=0.0,
+            settle_before=0.0, along_only=True,
         ),
     ]
 
@@ -252,7 +261,7 @@ class LegWalkPlanner:
             if not self._leg_done(leg, remaining, lateral, yaw_error):
                 if self._settling > 0.0:
                     return self._zero("settle", remaining, lateral, yaw_error)
-                return self._drive(leg, x, y, remaining, lateral, yaw_error)
+                return self._drive(leg, x, y, yaw, remaining, lateral, yaw_error)
             # Leg reached: coast to a stop before starting the next primitive.
             if self._settling > 0.0:
                 return self._zero("settle", remaining, lateral, yaw_error)
@@ -290,7 +299,7 @@ class LegWalkPlanner:
         if leg.kind == "turn":
             return abs(yaw_error) <= self.gait.yaw_tol
         if leg.lateral_first:
-            # The table sits ~0.12 m past this goal and the gait cannot be
+            # The table sits ~0.02 m past this goal and the gait cannot be
             # slowed (anything under the dead band simply does not walk), so a
             # forward command at 0.45 m/s always coasts ~0.25 m.  That makes the
             # stop line the one thing this leg may not negotiate: reach it and
@@ -336,11 +345,29 @@ class LegWalkPlanner:
         leg: WalkLeg,
         x: float,
         y: float,
+        yaw: float,
         remaining: float,
         lateral: float,
         yaw_error: float,
     ) -> WalkStep:
         gait = self.gait
+        rev = gait.reverse_vx if gait.reverse_vx > 0.0 else gait.vx
+        if (
+            leg.kind == "reverse"
+            and gait.turn_preview > 0.0
+            and remaining <= gait.turn_preview
+            and self._i + 1 < len(self.legs)
+            and self.legs[self._i + 1].kind == "turn"
+        ):
+            # Start yaw before reverse ends so wz is live when the arc begins.
+            # Otherwise the robot keeps walking world +X and only rotates late.
+            turn_err = wrap_angle(self.legs[self._i + 1].yaw - yaw)
+            return self._make(
+                leg,
+                (-rev, 0.0, _signed(gait.wz, turn_err)),
+                "reverse_preturn",
+                remaining, lateral, yaw_error,
+            )
         if leg.kind == "turn":
             if (
                 gait.turn_max_drift > 0.0
@@ -360,12 +387,14 @@ class LegWalkPlanner:
                 remaining, lateral, yaw_error,
             )
 
-        if abs(yaw_error) > gait.realign_yaw:
+        if abs(yaw_error) > gait.realign_yaw and not leg.along_only:
             # Too crooked to keep making progress: give up the travel axis and
             # arc back onto the leg heading.  The translation stays because the
             # policy will not yaw at all without one.  On a lateral_first leg it
             # always arcs backwards: whatever the goal is parked against is
             # straight ahead, so straightening up must not push into it.
+            # Skipped on along_only (place approach): that reverse is body -vx
+            # and walks world X after the right turn.
             self._fix_yaw = True
             sign = 1.0 if leg.kind == "forward" and not leg.lateral_first else -1.0
             return self._make(
@@ -375,13 +404,17 @@ class LegWalkPlanner:
                 remaining, lateral, yaw_error,
             )
 
-        vx = -gait.vx if leg.kind == "reverse" else gait.vx
+        vx = -rev if leg.kind == "reverse" else gait.vx
         self._fix_yaw = self._hysteresis(self._fix_yaw, yaw_error, gait.align_yaw)
         self._fix_lateral = self._hysteresis(
             self._fix_lateral, lateral, gait.lateral_tol
         )
         wz = _signed(gait.wz, yaw_error) if self._fix_yaw else 0.0
-        vy = _signed(gait.vy, lateral) if self._fix_lateral else 0.0
+        vy = (
+            0.0
+            if leg.along_only
+            else (_signed(gait.vy, lateral) if self._fix_lateral else 0.0)
+        )
         mode = leg.kind
         if leg.lateral_first:
             if self._braked:
@@ -391,11 +424,7 @@ class LegWalkPlanner:
                 return self._zero(
                     f"{leg.kind}_stopped", remaining, lateral, yaw_error
                 )
-            # ``vy`` alone does not move the robot, it only steers a walk that
-            # ``vx`` is already driving, so the sideways fix is a diagonal walk
-            # on the way in -- there is no standing still to strafe.  All of the
-            # correction has to happen in the run-in, before the stop line.
-            if self._fix_lateral:
+            if self._fix_lateral and not leg.along_only:
                 mode = f"{leg.kind}_align"
         return self._make(leg, (vx, vy, wz), mode, remaining, lateral, yaw_error)
 

@@ -128,8 +128,8 @@ class SmoothPickManifestTests(unittest.TestCase):
             [3.2],
         )
         vertical = place_path["vertical_compensation"]
-        self.assertEqual(vertical["runtime_control"], "cartesian_position_only_ik")
-        self.assertEqual(vertical["xy_policy"], "hold_live_tcp_xy_after_15")
+        self.assertEqual(vertical["runtime_control"], "cartesian_z_only_ik")
+        self.assertEqual(vertical["xy_policy"], "allow_xy_drift")
         self.assertEqual(
             vertical["z_policy"], "descend_only_to_scene_tray_clearance"
         )
@@ -262,6 +262,7 @@ class PlacePathTests(unittest.TestCase):
             module.z_only_descend_goal((1.2, -0.7, 0.75), 0.8),
             (1.2, -0.7, 0.75),
         )
+        self.assertEqual(module.PLACE_DESCEND_POS_AXES, (2,))
 
 
 class SmoothJointInterpolatorTests(unittest.TestCase):

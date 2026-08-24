@@ -158,6 +158,7 @@ class ArmDiffIK:
         q_ref_gain: float = 0.25,
         q_lo: torch.Tensor | None = None,
         q_hi: torch.Tensor | None = None,
+        pos_axes: tuple[int, ...] | None = None,
     ) -> torch.Tensor:
         """Compute absolute joint-position targets that drive the TCP to the goal.
 
@@ -175,6 +176,9 @@ class ArmDiffIK:
                 limit.  Use it to keep a posture (elbow / wrist) out of a range
                 the task must not enter.
             q_hi: optional per-joint upper bound, same convention as ``q_lo``.
+            pos_axes: if set (and ``target_quat_w`` is ``None``), only these
+                root-frame position axes are tasks.  ``(2,)`` tracks height
+                and lets X/Y drift as the shoulder lowers the arm.
 
         Returns:
             Desired joint positions for this arm, shape [N, num_joints].
@@ -204,6 +208,10 @@ class ArmDiffIK:
         else:
             error = self.w_pos * (tgt_pos_b - tcp_pos_b)
             jac = jac_b[:, 0:3, :] * self.w_pos
+            if pos_axes is not None:
+                axes = [int(a) for a in pos_axes]
+                error = error[:, axes]
+                jac = jac[:, axes, :]
 
         q = robot.data.joint_pos[:, self.joint_ids].clone()
         lo, hi = self.q_min, self.q_max
@@ -220,7 +228,7 @@ class ArmDiffIK:
         n_j = jac.shape[2]
         lam = (self.damping ** 2) * torch.eye(n_err, device=self.device, dtype=jac.dtype)
         eye_j = torch.eye(n_j, device=self.device, dtype=jac.dtype)
-        pos_dim = 3
+        pos_dim = 3 if target_quat_w is not None or pos_axes is None else error.shape[1]
         k_ref = float(q_ref_gain)
         for _ in range(max(1, self.max_iters)):
             pos_norm = torch.norm(error[:, :pos_dim], dim=-1).max()

@@ -132,15 +132,21 @@ ROBOT_INIT_POS = (PICK_STAND_XY[0], PICK_STAND_XY[1], 0.8)
 ROBOT_INIT_ROT = _yaw_quat(ROBOT_STAND_YAW)  # face -X
 
 # +X/+Y nudges the table away from the LoadingLine tray (上料口).
-_TABLE_XY_NUDGE = (0.45, 0.35)
+# 2026-08-24：15 展开后世界 +Y 不够进灰筐。桌往 −Y 收 12 cm；放置站不跟走。
+_TABLE_XY_NUDGE = (0.45, 0.23)  # was (0.45, 0.35); ΔY = −0.12 m
 TABLE_SPAWN_POS = (_TABLE_XY[0] + _TABLE_XY_NUDGE[0], _TABLE_XY[1] + _TABLE_XY_NUDGE[1], 0.0)
 TABLE_SPAWN_ROT = _yaw_quat(_TABLE_YAW_BEFORE + _CLUSTER_YAW)
 
-# 灰色托盘相对桌心 y-0.06，再往世界 -X 挪一点。放置站不跟这块托盘走。
+# HeavyDuty 局部 Y ±0.381；container_h20 局部 Y 半宽 0.247。
+# AABB 近沿对齐后再 +Y 收一点：整桌 AABB 比桌面可视边更靠机器人，否则筐沿会探出桌沿。
+_TABLE_LOCAL_HALF_Y = 0.381
+_TRAY_LOCAL_HALF_Y = 0.247
+PLACE_TRAY_EDGE_INSET_Y = 0.03  # 世界 +Y，筐沿收回桌面
 PLACE_TRAY_SHIFT_X = -0.15
+PLACE_TRAY_SHIFT_Y = -_TABLE_LOCAL_HALF_Y + _TRAY_LOCAL_HALF_Y + PLACE_TRAY_EDGE_INSET_Y
 PLACE_TRAY_CENTER_XY = (
     TABLE_SPAWN_POS[0] + PLACE_TRAY_SHIFT_X,
-    TABLE_SPAWN_POS[1] - 0.06,
+    TABLE_SPAWN_POS[1] + PLACE_TRAY_SHIFT_Y,
 )
 
 # Trailing world camera: ~1.15 m behind the robot, looking along its -X heading.
@@ -240,7 +246,7 @@ def _nudge_prim_world(prim, d_world) -> None:
 
 
 def place_gray_tray_on_table(env, env_ids=None):
-    """Sit ``container_h20`` on the tabletop, centered toward the place target."""
+    """Sit ``container_h20`` on the tabletop with its near-Y flush to the table."""
     del env_ids
     try:
         import omni.usd
@@ -254,12 +260,13 @@ def place_gray_tray_on_table(env, env_ids=None):
         return
     bbox = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
     want_x = PLACE_TRAY_CENTER_XY[0]
-    want_y = PLACE_TRAY_CENTER_XY[1]
     want_z0 = TABLE_TOP_Z + 0.002
     n_place = 0
     for i in range(env.num_envs):
-        prim = stage.GetPrimAtPath(
-            f"/World/envs/env_{i}/PackingTable/PackingTable_2/container_h20"
+        prefix = f"/World/envs/env_{i}/PackingTable/PackingTable_2"
+        prim = stage.GetPrimAtPath(f"{prefix}/container_h20")
+        table = stage.GetPrimAtPath(
+            f"{prefix}/SM_CratePacking_Table_A1/SM_HeavyDutyPackingTable_C02_01"
         )
         if not prim.IsValid():
             continue
@@ -271,12 +278,19 @@ def place_gray_tray_on_table(env, env_ids=None):
         cx = 0.5 * (float(mn[0]) + float(mx[0]))
         cy = 0.5 * (float(mn[1]) + float(mx[1]))
         z0 = float(mn[2])
+        tray_half_y = 0.5 * (float(mx[1]) - float(mn[1]))
+        want_y = PLACE_TRAY_CENTER_XY[1]
+        if table.IsValid():
+            table_rng = bbox.ComputeWorldBound(table).ComputeAlignedRange()
+            if not table_rng.IsEmpty():
+                table_min_y = float(table_rng.GetMin()[1])
+                want_y = table_min_y + tray_half_y + PLACE_TRAY_EDGE_INSET_Y
         _nudge_prim_world(prim, (want_x - cx, want_y - cy, want_z0 - z0))
         n_place += 1
     if n_place:
         print(
             f"[ces_scene] gray tote on table xy=({want_x:.3f},{want_y:.3f}) "
-            f"z0={want_z0:.3f} in {n_place} env(s)"
+            f"z0={want_z0:.3f} near-Y inset {PLACE_TRAY_EDGE_INSET_Y*1000:.0f}mm in {n_place} env(s)"
         )
 
 

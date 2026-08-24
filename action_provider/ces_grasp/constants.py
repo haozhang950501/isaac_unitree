@@ -67,8 +67,8 @@ GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
 # 旧 Place 回退：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
 PLACE_RELEASE_ABOVE_TABLE = 0.08
-# 新 05→15 Place：15 已经人工确定 X/Y，末段只做向下补偿。初始目标让 TCP
-# 停在灰筐上沿 20 mm；这是阿里云实测前的保守可调值，避免直接 IK 到桌面。
+# 新 05→15 Place：15 展开后只跟世界 Z 往下压，肩膀可转，X/Y 允许偏移。
+# 初始目标让 TCP 停在灰筐上沿 20 mm；阿里云实测前的保守可调值。
 PLACE_FINAL_TCP_ABOVE_TRAY = 0.020
 
 # 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
@@ -155,6 +155,7 @@ def clamp_pick_speed(scale: float | None) -> float:
 # 关键约束：策略对小指令不迈步（键盘点动走不动，必须长按把指令拉起来），
 # 所以平移/转向都用固定幅值 + 死区，不用比例控制。幅值参考键盘长按能走的量级。
 WALK_VX = 0.45  # 前进/后退幅值；< 0.3 基本只前后晃不迈步
+WALK_REVERSE_VX = 0.45
 # 侧移纠偏幅值。键盘 y_vel 上限 0.5，这里取 80%，与 vx/wz 各取上限 ~75% 一致。
 # 之前的 0.30 离死区只剩 20% 余量（vx 有 50%、wz 有 200%），实机侧移响应稍弱
 # 就整条被死区吃掉 —— 表现为 lat 一直冻在 0.12 不动、来回踱步。
@@ -170,7 +171,7 @@ WALK_TURN_MAX_DRIFT = 0.70  # 转弧走了这么远还没转到位 = 策略没�
 # 指令归零后策略还会多走一点：提前 stop_margin 松"油门"。
 # 若实测停不到位（走过头撞桌 / 差太多够不到灰筐），只调这两个值。
 WALK_STOP_MARGIN = 0.15
-# 最后一段：宁可停短，绝不许过。放置站骨盆离桌沿只有约 12 cm，走过头直接撞桌。
+# 最后一段：宁可停短，绝不许过。放置站骨盆离桌沿现在只有约 2 cm，走过头直接撞桌。
 # 新 Place 不再追世界灰筐中心：05→15 后只落 Z，所以停位 XY 误差不会由手臂补偿；
 # 用户明确接受不设 TCP X/Y 目标，安全上仍以不越过桌沿为第一优先级。
 # 0.20 撞过桌：`vx=0.45` 松手后滑行约 0.25 m，比余量还大，到 0.20 才停必然冲过去。
@@ -178,12 +179,16 @@ WALK_STOP_MARGIN = 0.15
 # 取 0.30 ≈ 滑行量：滑行 0.10~0.30 时落点在放置站前 0.20~0.00，**不会越过站点**。
 WALK_STOP_MARGIN_PLACE = 0.30
 # 桌沿在放置站正前方约这么远（骨盆投影）。只用于硬性禁入判定，不参与规划。
-WALK_TABLE_AHEAD_OF_STAND = 0.12
+# 2026-08-24 桌 −Y 12 cm 后近沿约在放置站前 2 cm（HeavyDuty 半宽 0.381）。
+WALK_TABLE_AHEAD_OF_STAND = 0.02
 # 骨盆离桌沿的最小安全距离：越过 (放置站 + AHEAD - SAFE) 就无条件停死并告警。
 # 这是兜底闩锁，不依赖任何规划逻辑 —— 前两次撞桌都是规划分支漏了停止条件。
 WALK_TABLE_SAFE = 0.06
-# 后退段少退一个转弧半径，让转弧终点自己落回放置站进入线（第③段几乎不用侧移）。
-WALK_TURN_LEAD = WALK_TURN_VX / WALK_WZ
+# 后退段少退一个转弧半径，再提前一点给 wz 爬升和滑行留余量。
+# 理论 R=vx/wz=0.375 m；实测转得太晚会把世界 X 走出放置站，后面还要用 −X 往回纠。
+WALK_TURN_LEAD = WALK_TURN_VX / WALK_WZ + 0.20
+# 距 backoff 目标这么远就开始带 wz 预转，转完时 X 才能落在放置站进入线上。
+WALK_TURN_PREVIEW = 0.25
 # 和 WALK_TURN_LEAD 同轴同向：lead 已经承担了"宁可退不够"，这里不用再收。
 WALK_BACKOFF_TRIM = 0.0
 # 转向的 stop_margin。实测（2026-08-19）在 0.25 处松手后还会多转约 14°，
@@ -258,16 +263,17 @@ PICK_STAND_XY = SCENE_PICK_STAND_XY
 SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
 SPAWN_STAND_YAW = PICK_STAND_YAW
 
-# 放置站面向桌子（yaw=π/2）。站位仍按桌心托盘位置算，不跟着托盘 -X 偏移走。
-# PLACE_TARGET_XY 才是灰筐中心（IK 放置目标）。
+# 放置站面向桌子（yaw=π/2）。站位按桌心 **Y 偏移之前** 的位置算，不跟
+# 2026-08-24 的桌子 −Y 平移走，否则 15 的 +Y 伸手距离原样不变。
+# PLACE_TARGET_XY 才是灰筐中心（随桌子一起 −Y）。
 PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = PLACE_TRAY_CENTER_XY
-_PLACE_STAND_FROM_XY = (TABLE_SPAWN_POS[0], TABLE_SPAWN_POS[1] - 0.06)
+_PLACE_STAND_FROM_XY = (-2.0869, -0.3117)
 PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
 # 旧清单的世界 XY+Z 目标；Smooth V1 不再追这个 XY。
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
-# Smooth V1 在 15 到位后锁住实时 TCP X/Y，只向下逼近这个世界 Z。若 15 已经
-# 低于该高度，状态机不会反向抬升，也不会继续向下压。
+# Smooth V1 在 15 到位后只向下逼近这个世界 Z；X/Y 不锁，肩膀可带动手臂下压。
+# 若 15 已经低于该高度，状态机不会反向抬升，也不会继续向下压。
 PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_FINAL_TCP_ABOVE_TRAY
 
 # HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
@@ -285,8 +291,10 @@ CARRY_WALK_GAIT = WalkGait(
     realign_yaw=WALK_REALIGN_YAW,
     leg_settle=WALK_LEG_SETTLE,
     turn_vx=WALK_TURN_VX,
+    reverse_vx=WALK_REVERSE_VX,
     wz_max=WALK_WZ_MAX,
     turn_max_drift=WALK_TURN_MAX_DRIFT,
+    turn_preview=WALK_TURN_PREVIEW,
     lateral_arrive=WALK_LATERAL_ARRIVE,
     yaw_arrive=WALK_YAW_ARRIVE_FINAL,
 )

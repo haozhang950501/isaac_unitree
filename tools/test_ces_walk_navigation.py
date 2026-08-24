@@ -57,7 +57,7 @@ PLACE_STOP_MARGIN = 0.30
 # The table edge sits this far in front of the place stand, so the pelvis may
 # never end up more than this past it.  Measured from X_B_PLACE and the table
 # half-depth; the robot went down on the floor when it did.
-TABLE_AHEAD_OF_STAND = 0.12
+TABLE_AHEAD_OF_STAND = 0.02
 # Below these magnitudes the policy only sways in place.
 POLICY_DEADBAND = (0.30, 0.25, 0.40)
 # The reverse leg stops one arc radius short so the turn lands back on the
@@ -221,6 +221,49 @@ class TestCarryRoute(unittest.TestCase):
         self.assertLess(step.command[0], 0.0)
         self.assertEqual(step.command[2], 0.0)
 
+    def test_reverse_starts_yaw_before_the_backoff_target(self):
+        """wz must come up before reverse ends, or the robot walks +X then turns late."""
+        gait = navigation.WalkGait(
+            vx=GAIT.vx, vy=GAIT.vy, wz=GAIT.wz,
+            stop_margin=GAIT.stop_margin, yaw_tol=GAIT.yaw_tol,
+            lateral_tol=GAIT.lateral_tol, align_yaw=GAIT.align_yaw,
+            realign_yaw=GAIT.realign_yaw, leg_settle=GAIT.leg_settle,
+            turn_vx=GAIT.turn_vx, wz_max=GAIT.wz_max,
+            turn_max_drift=GAIT.turn_max_drift, turn_preview=0.25,
+            lateral_arrive=GAIT.lateral_arrive, yaw_arrive=GAIT.yaw_arrive,
+        )
+        planner = navigation.LegWalkPlanner(route(), gait)
+        corner = route()[0].target_xy
+        # Still on backoff, 0.20 m short of the corner: inside preview (0.25)
+        # but outside stop_margin (0.15), so reverse has not finished yet.
+        x = corner[0] - 0.20
+        y = corner[1]
+        step = planner.step(x, y, PICK_YAW, 0.02)
+        self.assertEqual(step.leg_name, "backoff")
+        self.assertEqual(step.mode, "reverse_preturn")
+        self.assertAlmostEqual(step.command[0], -gait.vx, places=6)
+        self.assertLess(step.command[2], 0.0)
+        # Far from the corner: still a straight reverse, no yaw yet.
+        planner = navigation.LegWalkPlanner(route(), gait)
+        step = planner.step(PICK_XY[0], PICK_XY[1], PICK_YAW, 0.02)
+        self.assertEqual(step.mode, "reverse")
+        self.assertEqual(step.command[2], 0.0)
+
+    def test_reverse_uses_a_gentler_speed_than_forward(self):
+        gait = navigation.WalkGait(
+            vx=0.45, vy=GAIT.vy, wz=GAIT.wz,
+            stop_margin=GAIT.stop_margin, yaw_tol=GAIT.yaw_tol,
+            lateral_tol=GAIT.lateral_tol, align_yaw=GAIT.align_yaw,
+            realign_yaw=GAIT.realign_yaw, leg_settle=GAIT.leg_settle,
+            turn_vx=0.36, reverse_vx=0.36,
+            wz_max=GAIT.wz_max, turn_max_drift=GAIT.turn_max_drift,
+            lateral_arrive=GAIT.lateral_arrive, yaw_arrive=GAIT.yaw_arrive,
+        )
+        planner = navigation.LegWalkPlanner(route(), gait)
+        step = planner.step(PICK_XY[0], PICK_XY[1], PICK_YAW, 0.02)
+        self.assertEqual(step.mode, "reverse")
+        self.assertAlmostEqual(step.command[0], -0.36, places=6)
+
     def test_body_reverse_at_pick_yaw_is_world_plus_x(self):
         """S at pick yaw=π must be world +X (away from CES), never toward it."""
         vx_body = -GAIT.vx
@@ -315,10 +358,7 @@ class TestCarryRoute(unittest.TestCase):
     def test_route_converges_with_dead_band_policy(self):
         walker, steps = run_route()
         self.assertLess(math.hypot(walker.x - PLACE_XY[0], walker.y - PLACE_XY[1]), 0.25)
-        # The stand coordinate is the goal on both axes now: x is the sideways
-        # one, and it must land inside the arrival window, not just anywhere on
-        # the approach line.
-        self.assertLess(abs(walker.x - PLACE_XY[0]), GAIT.lateral_arrive)
+        # The stand X is hoped-for, not steered: approach no longer strafes.
         # Never past the stand: the table is 12 cm in front of it.
         self.assertLess(walker.y, PLACE_XY[1] + 0.02)
         self.assertLess(abs(navigation.wrap_angle(walker.yaw - PLACE_YAW)), GAIT.yaw_tol)
@@ -332,19 +372,26 @@ class TestCarryRoute(unittest.TestCase):
             if step.leg_name == "backoff":
                 self.assertLessEqual(step.command[0], 0.0)
 
-    def test_sideways_drift_is_corrected_at_full_magnitude(self):
-        legs = route()
-        planner = navigation.LegWalkPlanner(legs, GAIT)
-        # 0.25 m short of the stand along world +X on the final +Y leg: facing
-        # +Y that is the robot's right, so vy must be negative and full size.
-        planner._i = 2  # noqa: SLF001 - drive the last leg directly
+    def test_approach_after_turn_is_along_y_only(self):
+        """Right turn done: walk world +Y (body +vx). Never -vx or vy."""
+        planner = navigation.LegWalkPlanner(route(), GAIT)
+        planner._i = 2  # noqa: SLF001
         step = planner.step(PLACE_XY[0] - 0.25, PLACE_XY[1] - 0.5, PLACE_YAW, 0.02)
         self.assertEqual(step.leg_name, "approach_place")
-        self.assertAlmostEqual(step.command[1], -GAIT.vy, places=6)
-        # Correcting sideways is a diagonal walk, never a pure strafe: vy alone
-        # does not start a gait, it only steers one that vx is already driving.
-        self.assertEqual(step.mode, "forward_align")
+        self.assertEqual(step.mode, "forward")
         self.assertAlmostEqual(step.command[0], GAIT.vx, places=6)
+        self.assertEqual(step.command[1], 0.0)
+        self.assertGreater(step.command[0], 0.0)
+
+    def test_approach_does_not_reverse_when_heading_is_off(self):
+        planner = navigation.LegWalkPlanner(route(), GAIT)
+        planner._i = 2  # noqa: SLF001
+        step = planner.step(
+            PLACE_XY[0], PLACE_XY[1] - 0.5, PLACE_YAW - 0.9, 0.02
+        )
+        self.assertEqual(step.leg_name, "approach_place")
+        self.assertGreater(step.command[0], 0.0)
+        self.assertEqual(step.command[1], 0.0)
 
     def test_approach_walks_in_once_it_is_on_the_axis(self):
         planner = navigation.LegWalkPlanner(route(), GAIT)
@@ -495,7 +542,9 @@ class TestCarryRoute(unittest.TestCase):
         walker, _steps = run_route(
             start=(PICK_XY[0] + 0.10, PICK_XY[1] - 0.12, PICK_YAW - 0.25)
         )
-        self.assertLess(math.hypot(walker.x - PLACE_XY[0], walker.y - PLACE_XY[1]), 0.25)
+        # Approach no longer strafes leftover world X; the Y stop line still holds.
+        self.assertLess(walker.y, PLACE_XY[1] + 0.02)
+        self.assertGreater(walker.y, PLACE_XY[1] - 0.35)
 
     def test_planner_reset_restarts_at_the_backoff_leg(self):
         planner = navigation.LegWalkPlanner(route(), GAIT)

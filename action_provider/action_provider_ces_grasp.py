@@ -443,6 +443,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
                         q_ref=cmd.arm_q_ref,
                         q_lo=cmd.arm_q_lo,
                         q_hi=cmd.arm_q_hi,
+                        pos_axes=cmd.ik_pos_axes,
                     )
                     full_action[self._right_arm_idx] = self._slew_arm(q_des[0])
                 except Exception as e:

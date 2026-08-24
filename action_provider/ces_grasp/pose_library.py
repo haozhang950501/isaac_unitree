@@ -226,8 +226,8 @@ def load_waypoint_set(name: str | None = None) -> CesWaypointSet:
                 f"waypoint set {set_name} place_path needs vertical_compensation"
             )
         expected_vertical = {
-            "runtime_control": "cartesian_position_only_ik",
-            "xy_policy": "hold_live_tcp_xy_after_15",
+            "runtime_control": "cartesian_z_only_ik",
+            "xy_policy": "allow_xy_drift",
             "z_policy": "descend_only_to_scene_tray_clearance",
         }
         for key, expected in expected_vertical.items():

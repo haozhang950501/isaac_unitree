@@ -6,7 +6,7 @@
 → GRASP → LIFT → RETURN_HOME(40阶段实时q→30→20→05胸前) → CARRY/HOLD
 → GOTO_PLACE(snap/walk，保持05) → PLACE_HOLD(walk 到站后钉盆冻05)
 → PLACE_APPROACH(人工关节位姿05→15)
-→ PLACE_DESCEND(锁实时XY、Unitree IK只落Z) → RELEASE → RETRACT(逆序回05)。
+→ PLACE_DESCEND(Unitree IK只跟Z、肩可转、允许XY偏移) → RELEASE → RETRACT(逆序回05)。
 
 机器人 spawn 就在抓取站，SETTLE/GOTO_PICK 只是把骨盆钉在原地，不瞬移。
 
@@ -29,7 +29,7 @@ from isaaclab.utils.math import quat_apply, quat_from_matrix, subtract_frame_tra
 
 from action_provider.ces_grasp import constants as C
 from action_provider.ces_grasp.navigation import LegWalkPlanner
-from action_provider.ces_grasp.place_policy import z_only_descend_goal
+from action_provider.ces_grasp.place_policy import PLACE_DESCEND_POS_AXES, z_only_descend_goal
 from action_provider.ces_grasp.pose_library import CesWaypointSet, load_waypoint_set
 from action_provider.manip_common import CartesianInterpolator, JointSpaceInterpolator
 from action_provider.manip_common.interpolation import (
@@ -78,6 +78,7 @@ class CesCommand:
     arm_q_hi: torch.Tensor | None = None
     snap_z: float | None = None
     snap_quat: tuple[float, float, float, float] | None = None
+    ik_pos_axes: tuple[int, ...] | None = None
 
 
 def top_down_grasp_quat(jaw_axis_w: torch.Tensor) -> torch.Tensor:
@@ -312,6 +313,7 @@ class CesPickPlaceStateMachine:
         arm_q=None,
         arm_q_ref=None,
         arm_limits=None,
+        ik_pos_axes=None,
     ) -> CesCommand:
         if (
             not snap
@@ -346,6 +348,7 @@ class CesPickPlaceStateMachine:
             arm_q_hi=q_hi,
             snap_z=snap_z if snap else None,
             snap_quat=snap_quat if snap else None,
+            ik_pos_axes=ik_pos_axes,
         )
 
     def _squeezing(self) -> bool:
@@ -425,9 +428,7 @@ class CesPickPlaceStateMachine:
         self._carry_quat_w = self._grasp_quat_w.clone()
 
         if self._waypoints is not None and self._waypoints.place_waypoints:
-            # The approved pose 15 owns Place X/Y.  The live TCP is read after
-            # 15 and only its Z is compensated, so no world tray-center target
-            # is planned here.
+            # Pose 15 展开后由 Z-only IK 把手臂压下去；不再锁死世界 X/Y。
             self._place_pos_w = None
             self._place_quat_w = None
         else:
@@ -502,6 +503,7 @@ class CesPickPlaceStateMachine:
                 f"tray_center=({C.PLACE_TARGET_XY[0]:.3f},{C.PLACE_TARGET_XY[1]:.3f}) "
                 f"cmd |vx|={C.WALK_VX:.2f} |wz|={C.WALK_WZ:.2f} "
                 f"turn_vx={C.WALK_TURN_VX:.2f} lead={C.WALK_TURN_LEAD:.3f}m "
+                f"preturn={C.WALK_TURN_PREVIEW:.2f}m "
                 f"(fixed magnitudes; the policy ignores small commands, "
                 f"and a pure yaw command does not step at all)"
             )
@@ -541,6 +543,12 @@ class CesPickPlaceStateMachine:
             print(
                 f"[ces_fsm] walk stopped at the place stand line "
                 f"(rem={step.remaining:+.3f}m) and stays stopped.{square}"
+            )
+        if step.mode == "reverse_preturn" and self._walk_mode != "reverse_preturn":
+            print(
+                f"[ces_fsm] walk pre-turn at ({x:.3f},{y:.3f}) "
+                f"head={math.degrees(yaw):.0f}deg — yaw starts before backoff ends "
+                f"so place-stand X is not overshot"
             )
         self._walk = list(step.command)
         self._walk_mode = step.mode
@@ -835,6 +843,24 @@ class CesPickPlaceStateMachine:
         lo[elbow] = max(float(lo[elbow]), C.PLACE_ELBOW_MIN)
         return lo, hi
 
+    def _place_descend_joint_window(self, q_home: torch.Tensor):
+        """Place 下降：腕锁在 15 附近，肩三轴放开，用肩膀把手臂压下去。"""
+        ik = self.ctx.ik
+        lo, hi = ik.q_min.clone(), ik.q_max.clone()
+        idx = {name: i for i, name in enumerate(C.RIGHT_ARM_JOINTS)}
+        for name in (
+            "right_wrist_roll_joint",
+            "right_wrist_pitch_joint",
+            "right_wrist_yaw_joint",
+        ):
+            i = idx[name]
+            win = C.PLACE_WRIST_WINDOW
+            lo[i] = torch.clamp(q_home[i] - win, min=float(ik.q_min[i]))
+            hi[i] = torch.clamp(q_home[i] + win, max=float(ik.q_max[i]))
+        elbow = idx["right_elbow_joint"]
+        lo[elbow] = max(float(lo[elbow]), C.PLACE_ELBOW_MIN)
+        return lo, hi
+
     def _capture_place_raise_q(self):
         """记下抬臂段末的关节姿态，收臂时按它原路退回。"""
         if self._place_raise_q is not None or not self.interp.bounds:
@@ -1074,9 +1100,9 @@ class CesPickPlaceStateMachine:
     def _begin_place_approach(self):
         """Start the manifest 05→15 Place path, or the legacy Cartesian path.
 
-        Smooth V1 uses the user-authored joint pose 15.  Its X/Y are final:
-        after this joint segment, Unitree reads the live TCP and performs a
-        separate Z-only position-IK compensation.
+        Smooth V1 uses the user-authored joint pose 15.  After that joint
+        segment, Unitree reads the live TCP and lowers it with Z-only
+        position IK: the shoulder may rotate the arm down, and X/Y may drift.
 
         旧清单仍走两段笛卡尔路径：① 贴身抬臂（只往前挪一点点，避免死折肘）先升到放置
         高度，桌沿和灰筐沿都在手下方；② 保持这个高度水平伸过去。所以件永远
@@ -1150,7 +1176,7 @@ class CesPickPlaceStateMachine:
         self._log_tcp("place_start")
 
     def _begin_place_vertical_descend(self):
-        """Hold pose-15 live TCP X/Y and interpolate downward with Unitree IK."""
+        """Lower TCP in Z only; shoulder may rotate, live X/Y may drift."""
         now, _quat_now = self.ctx.ik.get_tcp_pose_w()
         goal = now.clone()
         now_z = float(now[0, 2])
@@ -1166,15 +1192,15 @@ class CesPickPlaceStateMachine:
         q15 = self.ctx.get_right_arm_q()[0].clone()
         if self._place_raise_q is None:
             self._place_raise_q = q15.clone()
-        self._place_limits = self._place_joint_window(q15)
+        self._place_limits = self._place_descend_joint_window(q15)
         self.interp.reset(now, goal, self._place_descend_time)
         self._place_descend_started = True
         print(
-            f"[ces_fsm] Place Z-only IK: hold live xy="
-            f"({float(now[0, 0]):.4f},{float(now[0, 1]):.4f}) "
+            f"[ces_fsm] Place Z IK (XY free, shoulder may lower): "
+            f"start xy=({float(now[0, 0]):.4f},{float(now[0, 1]):.4f}) "
             f"z={now_z:.4f}->{goal_z:.4f} "
             f"dz={(goal_z - now_z)*1000:+.1f}mm "
-            f"dur={self._place_descend_time:.2f}s (no XY/orientation target)"
+            f"dur={self._place_descend_time:.2f}s"
         )
         self._log_tcp("place_15")
 
@@ -1550,11 +1576,11 @@ class CesPickPlaceStateMachine:
                     # distance and the arrival tells us what that really is:
                     # coast = margin - along.  Tune the margin with this number
                     # instead of guessing, and keep along > 0 (short of the
-                    # stand) because the table edge is only 0.12 m past it.
+                    # stand) because the table edge is only ~0.02 m past it.
                     coast = C.WALK_STOP_MARGIN_PLACE - along
                     reach = C.X_B_PLACE + along
                     if self._waypoints is not None and self._waypoints.place_waypoints:
-                        place_xy_note = "pose15 fixed XY; IK only compensates Z"
+                        place_xy_note = "pose15 then Z-only IK; XY may drift"
                     else:
                         place_xy_note = "legacy world-XY IK may compensate short stop"
                     print(
@@ -1631,7 +1657,7 @@ class CesPickPlaceStateMachine:
                     self._place_raise_q = q.clone()
                     print(
                         f"[ces_fsm] Place pose 15 reached q={self._fmt_q(q)} — "
-                        "next: lock live XY and descend only Z"
+                        "next: Z-only IK, shoulder may lower, XY unlocked"
                     )
                     self._transition(CesPickPlacePhase.PLACE_DESCEND)
                 return self._place_body_cmd(tcp=None, arm_q=q)
@@ -1673,14 +1699,16 @@ class CesPickPlaceStateMachine:
                     or self.t > self._place_descend_time + 1.0
                 ):
                     self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
-                    err = (
-                        self.ctx.ik.position_error_norm(goal)
-                        if goal is not None
-                        else 0.0
-                    )
+                    live, _ = self.ctx.ik.get_tcp_pose_w()
+                    z_err = abs(float(live[0, 2]) - float(goal[0, 2])) if goal is not None else 0.0
+                    xy_drift = math.hypot(
+                        float(live[0, 0] - goal[0, 0]),
+                        float(live[0, 1] - goal[0, 1]),
+                    ) if goal is not None else 0.0
                     print(
-                        f"[ces_fsm] Place Z-only compensation complete "
-                        f"(tcp_err={err*1000:.0f}mm, live XY unchanged) — release"
+                        f"[ces_fsm] Place Z descend complete "
+                        f"(z_err={z_err*1000:.0f}mm xy_drift={xy_drift*1000:.0f}mm) "
+                        f"— release"
                     )
                     self._log_tcp("place_release")
                     self._transition(CesPickPlacePhase.RELEASE)
@@ -1689,6 +1717,7 @@ class CesPickPlaceStateMachine:
                     quat=None,
                     arm_q_ref=self._q_ref_for_place(),
                     arm_limits=self._place_limits,
+                    ik_pos_axes=PLACE_DESCEND_POS_AXES,
                 )
 
             # Legacy manifests keep the historical immediate release fallback.

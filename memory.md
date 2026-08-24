@@ -2,7 +2,7 @@
 
 更新时间：2026-08-24（pick/walk 夹持已稳住；walk 到站钉**实际骨盆完整四元数**。05 与 15 已在 `urdf_pose_toolkit` 重新人工设计并仅替换 Unitree 姿态 q；下一步在阿里云复验新姿态的全流程夹持、避碰与落筐。见 §6.7、§11。）
 
-**下一阶段：在阿里云 Isaac Sim 实跑新 `40(live)→30→20→05→walk→15→Z-only IK→release`**，重点验产品是否刮抽屉/碰胸、walk 是否稳、15 是否对准托盘以及下降/松爪是否碰沿。夹持、定盘和 Place 的 X/Y 策略不要为了够着灰筐去改。见 §11。
+**下一阶段：在阿里云 Isaac Sim 实跑新 `40(live)→30→20→05→walk→15→Z-only IK（XY 不锁）→release`**，重点验产品是否刮抽屉/碰胸、walk 是否稳、15 是否对准托盘以及肩带动下降/松爪是否碰沿。夹持和定盘不要为了够着灰筐去改。见 §11。
 
 ## 1. 项目概况
 
@@ -17,7 +17,7 @@
 | **当前主任务** | `Isaac-Move-CES-Product-G129-Dex1-Wholebody` |
 | 机器人 | Unitree G1 29DoF + Dex1 + Wholebody |
 
-**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → `40(live)→30→20→05` 收到胸前 → HOLD 后 `walk` 真实走到放置站 → `05→15` 人工关节姿态 → 锁实时 X/Y、只落 Z → 松爪。夹取靠垫面摩擦，不焊 TCP。
+**本阶段进展**：右手 Dex1 从 LoadingLine 托盘夹起 Product（默认 `ces_pick_smooth_v1`）→ 胸口高度抬起 → `40(live)→30→20→05` 收到胸前 → HOLD 后 `walk` 真实走到放置站 → `05→15` 人工关节姿态 → 只落 Z（肩可转、XY 不锁）→ 松爪。夹取靠垫面摩擦，不焊 TCP。
 
 **当前状态（更新至 2026-08-24）**：
 
@@ -25,7 +25,7 @@
 - 抬起后阶段 `RETURN_HOME`（枚举名保留）：Smooth v1 按独立回收清单 `40(live)→30→20→05_chest_carry` 收到胸前，夹爪保持闭合，到05后再 walk；旧 V1/V2 回退组仍保持逆序回00。
 - **Walk 换站已跑通**：「后退 → 边退边右转（转弧）→ 前进」，固定幅值 + 死区（§6.2）。Isaac Sim 实测后退、右转、走到放置站范围都 OK。
 - **pick→walk 禁止先往前凑步**（2026-08-24）：只发满幅 S 不够。松钉第一帧必须 `actor_obs_buffer.reset()` + 骨盆/产品后退 kick，否则策略会先朝 CES 走两步再后退。见 §6.6。
-- **Place 已改为人工 q + 最小 IK 交接**：05→15 用清单关节插补；15 后不追灰筐中心 X/Y，只保留实时 X/Y 并向下补偿 Z。pose 25 已取消，见 §11。
+- **Place 已改为人工 q + Z-only IK**：05→15 用清单关节插补；15 后只跟踪世界 Z，肩膀可转，X/Y 允许偏移，不追灰筐中心。pose 25 已取消，见 §11。
 - **walk→place 夹持已稳住**（2026-08-24 傍晚 Isaac Sim）：到站钉实际 XY/Z **加上走路残留的完整四元数**，手臂只 PD、夹爪锁 `0.019`、钉盆时不跑步态。旧的纯 yaw 钉盆会把夹爪甩开。见 §6.7。
 - 本次新 q 的清单加载、`05→15` 插补和 Z-only 策略 4 项专项测试通过；全套 45 项中 44 项通过，唯一失败是旧测试仍写死上一版 05/15 q。按“只改姿态 q 和记忆”的边界暂不改测试。导航仍含 900 组撞桌扫描（§6.2 末）。
 
@@ -158,14 +158,14 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → RETURN_HOME(40 live→30→20→05胸前) → CARRY/HOLD
         → GOTO_PLACE(walk 三段：后退→转弧→前进，到线停死，保持05)
         → PLACE_HOLD(钉实际骨盆 live quat，冻05，夹爪不动，约 1.5 s)
-        → PLACE_APPROACH(关节05→15) → PLACE_DESCEND(锁实时XY、Unitree IK只落Z)
+        → PLACE_APPROACH(关节05→15) → PLACE_DESCEND(IK只跟Z、肩可转、允许XY偏移)
         → RELEASE → RETRACT(15→05)
 ```
 
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
 - 夹住后：手臂改走 PD（不再瞬移关节），Dex1 只走 PD 闭合，靠垫面摩擦把件提起。
 - 换站：`walk` 走真实步态（§6）；`snap` 仅作对照，瞬移骨盆时才把零件跟着平移（不是每帧焊 TCP）。
-- 放置：人工 q 决定 X/Y 姿态，`05→15` 关节插补后只做 Z 轴位置 IK；初始目标是灰筐沿上方 20 mm，阿里云实测后再调（§11）。
+- 放置：`05→15` 关节插补后只做世界 Z 的位置 IK，肩膀可带动手臂下压，X/Y 允许偏移（不追灰筐中心）。初始目标是灰筐沿上方 20 mm（§11）。
 - `r`：`env.reset()` + `reset_object_self` 把 Product 写回托盘，并 `CESGrasp.reset_task()`。
 
 ### 3.2 踩过的坑（不要再走）
@@ -221,8 +221,8 @@ tools/probe_ces_workspace.py
 ces_machine spawn ≈ (-3.957, -1.822, 0.961)，yaw = 0°
 Product 世界位姿  ≈ (-3.487, -0.950, 0.821)，yaw = +90°
 LoadingLine 底高  z = 0.6173
-packing_table     ≈ (-2.087, -0.252, 0)，yaw = +180°，scale_z≈0.621
-                  （相对上料口 +0.45 X / +0.35 Y）
+packing_table     ≈ (-2.087, -0.372, 0)，yaw = +180°，scale_z≈0.621
+                  （相对上料口 +0.45 X / +0.23 Y；2026-08-24 桌 −Y 12 cm，放置站不跟）
 机器人初始        ≈ (-2.037, -2.302, 0.8)，朝 -X
 PerspectiveCamera 在机器人身后约 1.15 m，朝 -X 看向 CES 正面
 ```
@@ -279,7 +279,8 @@ STAND_STABLE_TIME = 0.2             # 原 0.5；三者合计 2.1s → 0.7s，见
 STAND_PELVIS_Z = 0.755
 pick  x_b=0.30  y_b=-0.38  yaw=π     stand ≈ (-3.19, -1.33)
 place x_b=0.46  y_b=-0.18  yaw=π/2   stand ≈ (-2.27, -0.77)
-PLACE_TARGET_XY = 桌心 y-0.06 再 −X 15 cm ≈ (-2.237, -0.312)  # 放置站仍按未偏移桌心算，不跟着托盘走
+PLACE_TARGET_XY = 桌心 −X 15 cm、近沿对齐后再 +Y 3 cm ≈ (-2.237, -0.476)
+# 放置站仍按桌 Y 偏移前的位置算 (-2.267, -0.772)，不跟着桌子走
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.08
 # 灰筐 container_h20 留在桌上；不要贴桌 IK，会抖
 ```
@@ -330,19 +331,20 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 
 | 段 | kind | 内容 | 终点 |
 |---|---|---|---|
-| ① backoff | reverse | 负 `vx` 退出 CES，退到"入弧点" | `(-2.642, -1.330)` |
-| ② turn_to_table | turn | **继续后退**（`vx=-0.45`）+ 右转 `wz=-1.20`，`yaw π → π/2` | `(-2.267, -1.705)`，正对桌子 |
+| ① backoff | reverse | 负 `vx` 退出 CES，距入弧点 `WALK_TURN_PREVIEW` 起预转 | `(-2.842, -1.330)` |
+| ② turn_to_table | turn | **继续后退**（`vx=-0.45`）+ 右转 `wz=-1.20`，`yaw π → π/2` | X 落在放置站进入线 `x≈-2.267`，正对桌子 |
 | ③ approach_place | forward | 正 `vx` 走世界 `+Y`，途中**斜行**纠侧偏，到停止线就停死 | `PLACE_STAND_XY (-2.267, -0.772)` 前约 `stop_margin` |
 
-- 转弧半径 `R = WALK_TURN_VX / WALK_WZ = 0.45/1.20 = 0.375 m`。后退段目标 = "后退线 × 放置进入线"交点 `(-2.267,-1.330)` 沿后退方向**少退 R**，这样转弧正好把机器人扫回进入线 `x=-2.267`，第③段几乎不用侧移。这个提前量就是 `WALK_TURN_LEAD`，落点偏了只调它。
-- **转弧带的是后退不是前进**：后退是唯一实测能迈步的模式；而且弧终点被推到 `y=-1.705`，第③段留 0.93 m 行程，`stop_margin` 才有作用空间。若改成前进转弧，转完只剩 0.18 m 到桌前，而桌沿余量只有 0.12 m，一过冲就撞桌。
-- 转弧全程 x 单调增大，是**远离** CES 的方向；最靠近 CES 的时刻就是弧起点 `x=-2.642`（比抓取站还外 0.55 m）。
+- 转弧半径 `R = WALK_TURN_VX / WALK_WZ = 0.45/1.20 = 0.375 m`。`WALK_TURN_LEAD = R + 0.20`：理论少退一个半径，再提前 20 cm，抵消 wz 爬升和滑行把世界 X 走出进入线。落点 X 偏了只调 lead。
+- 距 backoff 目标 `WALK_TURN_PREVIEW=0.25 m` 就开始带 `wz`（mode `reverse_preturn`），转完时 X 应对齐放置站，第③段主要走世界 +Y，少用侧向 −X。
+- **转弧带的是后退不是前进**：后退是唯一实测能迈步的模式；而且弧终点被推到 `y=-1.705`，第③段留 0.93 m 行程，`stop_margin` 才有作用空间。若改成前进转弧，转完只剩 0.18 m 到桌前，而桌沿余量只有约 0.02 m，一过冲就撞桌。
+- 转弧全程 x 单调增大，是**远离** CES 的方向；最靠近 CES 的时刻就是弧起点（现在约 `x=-2.84`）。
 - `WALK_BACKOFF_TRIM` 已归零：它和 `WALK_TURN_LEAD` 同轴同向，"宁可退不够"的作用由 lead 承担，两个一起留会退得太少、贴着 CES 转弧。
 - **pick→walk 起步**：CARRY 立刻满幅 S（`prime_walk_filt`），并且必须 `_begin_walk_policy` 清空 10 帧站立观测 + 后退 kick。只发满幅 S 仍会先往前走两步，见 §6.6。
-- **后退 → 转弧 → 前进全程不停**：`settle_before=0.0` 同时给 turn 和 approach。先 settle 成静止再起下一步，策略抬不起步（转不动 / 转完不往 +Y 走）。右转结束后直接发机体系 `+vx`（W）；转正后面朝桌子时这就是世界 +Y。下发滤波在 `vx` 变号时跳变，不从 −0.45 ramp 过 0（过 0 会再次停步）。
+- **最后一段只走世界 +Y**：右转结束后只发机体系 `+vx`（W），这就是世界 +Y。不再发 `vy` 纠世界 X，也不再 `forward_realign` 的 −vx。X 残差留给手臂。
 - 漂移保护：转弧走了 `WALK_TURN_MAX_DRIFT=0.70 m` 还没转到位，说明策略没吃下 `wz`，此时把幅值提到 `WALK_WZ_MAX=1.55` 并**把弧反向**（mode 记作 `turn_pinned`，日志打醒目告警），边把漂移走回去边继续试。**注意这里不能砍掉 `vx`**：`vx` 是唯一能触发步态的轴，归零只会原地冻住、白等 60 s 超时。
 - `WALK_YAW_ARRIVE=0.40` 是**转向的 stop_margin**（0.15 → 0.25 → 0.40）：实测在 0.25 处松手后还会多转约 14°，即余转合计约 28°，所以提前到约 23° 松手。落点 `head=70°`（目标 90°）就是松手太晚的证据。
-- 灰色托盘中心 = `PLACE_TARGET_XY`（桌心 y−0.06 再 `PLACE_TRAY_SHIFT_X=-0.15`）。**放置站不跟托盘走**，仍按未偏移桌心算 `(-2.267, -0.772)`。
+- 灰色托盘中心 = `PLACE_TARGET_XY`（桌心 `PLACE_TRAY_SHIFT_X=-0.15`，近沿与桌 AABB 对齐后再 `PLACE_TRAY_EDGE_INSET_Y=+0.03`，避免筐沿探出桌面）。**放置站不跟桌子 −Y 走**，仍为 `(-2.267, -0.772)`。
 - 走位交点由 `build_carry_route` 从**放置站**算出，挪托盘不会改路线。
 - 进度按**行走轴投影**算（不是欧氏距离），侧向漂移不会让某段转不完。
 - 平移中的纠偏也是固定幅值 + 带回差的死区：朝向差 > `WALK_ALIGN_YAW=0.20` 才发 `wz`，> `WALK_REALIGN_YAW=0.60` 就放弃行进轴、**带着 `turn_vx` 弧线转正**（realign 以前发纯偏航，同样不起步，一起改了）；侧向差 > `WALK_LATERAL_TOL=0.10` 才发 `vy` 侧移。`align_yaw` 从 0.30 收到 0.20 是因为转弧收尾会留约 14° 残差，0.30（17°）够不到它 —— 日志里 `err=+14deg` 而 `cmd_b` 第三位一直是 0，机器人就那么歪着走完最后一段。
@@ -355,12 +357,12 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
   - 姿态窗口仍**不能小于对应纠偏的进入阈值**，否则永远报不出 on_target。
 - **`stop_margin` 必须 ≥ 滑行量，这是最关键的一个数**。`vx=0.45` 松手后滑行约 0.25 m，而旧的 `WALK_STOP_MARGIN_PLACE=0.20` 比滑行量还小 → 到 0.20 才停必然冲过站点。又因为 `vx` 低于死区根本不迈步，**没法缓刹**，唯一手段就是提前松手。现在 `0.30`。
   - 到站日志直接算出 **`coast = margin - along`** 和 `arm_reach`。**下次实机跑完就按 `coast + 0.05` 重设这个余量**，别再猜。
-  - `along` 必须 >0（停短）。2026-08-24 的 Place 不再追世界灰筐中心：到站后执行固定 05→15，末段只落 Z；因此停位误差会原样反映到放置 X/Y。用户已明确不要求 TCP 自动补偿 X/Y，安全上仍是停短优先，绝不能越过撞桌。
+  - `along` 必须 >0（停短）。Place 15 后只跟 Z、不追灰筐中心；下降时 XY 可随肩膀偏移。安全上仍是停短优先，绝不能越过撞桌。
   - `X_B_PLACE=0.46 m` 现在只用于放置站几何和日志，不再作为 Place IK 的 X 目标。等实测 `coast` 出来仍应收紧停车余量，减少放置 XY 漂移。
-- **硬性禁入闩锁（兜底，不依赖规划逻辑）**：`_table_keepout_hit` 只看骨盆相对放置站的投影，越过 `WALK_TABLE_AHEAD_OF_STAND(0.12) - WALK_TABLE_SAFE(0.06)` 就无条件零指令 + 告警 + 就地放置。前两次撞桌都是**规划分支漏了停止条件**，所以最关键的那个"停"不能只写在规划里。
+- **硬性禁入闩锁（兜底，不依赖规划逻辑）**：`_table_keepout_hit` 只看骨盆相对放置站的投影，越过 `WALK_TABLE_AHEAD_OF_STAND(0.02) - WALK_TABLE_SAFE(0.06)` 就无条件零指令 + 告警 + 就地放置。前两次撞桌都是**规划分支漏了停止条件**，所以最关键的那个"停"不能只写在规划里。
 - 走路时不调用 `_apply_snap`、不移动 Product root；右臂保持 `_carry_arm_q`、Dex1 保持 `GRIPPER_CLOSED`，件仍只靠垫面摩擦。
 - 到站稳定 `WALK_ARRIVE_HOLD=0.35 s` 后锁实际骨盆位姿，日志打 `dxy/dyaw` + **分解到行走轴的 `along`（+=停短）和侧向 `side`（−=偏左）** + `coast` + `arm_reach`。旧故障会打成 `along=-150mm side=-300mm`。
-- 走路到站后锁实际骨盆位姿；Place 不做世界 X/Y 补偿，人工 15 决定手臂横向位置，最终 IK 只改 Z。旧记录里的 `PLACE_HOLD_XY_M_WALK` 常量代码里并不存在。
+- 走路到站后锁实际骨盆位姿；Place 不追世界灰筐中心。15 后 IK 只跟 Z，肩膀可转，X/Y 允许偏移。旧记录里的 `PLACE_HOLD_XY_M_WALK` 常量代码里并不存在。
 
 纯 CPU 测试：`python -m unittest tools.test_ces_walk_navigation`（27 项）。死区模型是"|vx|<0.30 / |vy|<0.25 / |wz|<0.40 不动"，外加最关键的一条：**`vx` 低于死区时整条指令作废**（`vy`/`wz` 再大也不动），用来复现两次真实故障 —— 原地纯偏航转不动、放置站前纯侧移冻住 18 s。`test_body_reverse_at_pick_yaw_is_world_plus_x` 守住 pick 朝向 π 时 S 必须是世界 +X。
 
@@ -727,21 +729,22 @@ Place 只保留两个人工关节姿态，不使用 25。2026-08-24 傍晚 Isaac
 - **不要**为了够着灰筐去改钉盆、夹爪 kp、或重新加入世界 X/Y IK。夹持通道已经稳住。
 - 05 仍是 walk 全程持物姿态，也是回收终点；改 05 等于同时改 walk 平衡，需在 Isaac Sim 再验后退/转弧。
 
-### 11.2 15 后的纯 Z IK 交接
+### 11.2 15 后的 Z-only IK（肩可转，XY 不锁）
 
-15 到位后的下一个控制周期才读取 Unitree 真实 TCP，避免读取到上一帧尚未执行完的 q。目标规则：
+15 到位后的下一个控制周期才读取 Unitree 真实 TCP，避免读取到上一帧尚未执行完的 q。IK **只把世界 Z 当任务**（`pos_axes=(2,)`），不再把 15 的 X/Y 钉死：
 
 ```text
-goal.x = live_tcp_after_15.x
-goal.y = live_tcp_after_15.y
+task = world Z only
 goal.z = min(live_tcp_after_15.z, PLACE_FINAL_TCP_Z)
 PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.020
+q_ref = pose 15（零空间，腕保持）
+肩 pitch/roll/yaw 窗口放开，腕仍锁在 15 附近
 ```
 
-- X/Y 完全取 15 到位后的实时值，不再追 `PLACE_TARGET_XY`，walk 停位误差不会触发手臂横向补偿。
-- Z 使用现有 `CartesianInterpolator` smoothstep 插补，状态机继续通过位置 IK 跟踪；不给朝向目标，零空间参考保持 pose 15。
-- “只降不升”：如果真实 15 已经低于目标 Z，则目标等于当前 Z，不反向抬手，也不继续向下压。
-- 初始目标是灰筐上沿上方 `20 mm`。只在阿里云 Isaac Sim 看清产品底面、指垫和筐沿后调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要用 URDF 代理值冒充真 TCP 验收。
+- 不追 `PLACE_TARGET_XY`。下降时肩膀旋转把手臂往下靠，TCP 的 X/Y 可以跟着偏。
+- Z 仍用 `CartesianInterpolator` smoothstep；不给朝向目标。
+- “只降不升”：如果真实 15 已经低于目标 Z，则目标等于当前 Z，不反向抬手。
+- 初始目标是灰筐上沿上方 `20 mm`。只在阿里云看清产品底面、指垫和筐沿后调 `PLACE_FINAL_TCP_ABOVE_TRAY`。
 - RELEASE 后先逆向回到 15，再回胸前 05；夹持阶段含 Z 下降全程保持 `GRIPPER_CLOSED`。
 
 ### 11.3 验证边界
@@ -750,4 +753,4 @@ PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.020
 
 **Isaac Sim 历史基线（2026-08-24 傍晚，上一版 05/15）**：pick → walk（直接后退，不再先往 CES 凑步）→ 到站钉 live quat → PLACE_HOLD → 05→15，产品不再脱落。Walk 期间腰必须保持默认指令，否则上身会歪。新 q 尚未复验。
 
-尚未验收：新 05 在 `20→05` 与 walk 中是否稳定、新 15 的托盘对准、Z 下降是否进筐且不碰沿、松爪落点。实跑后再调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要用 URDF 代理值冒充真 TCP，也不要加回世界 X/Y 目标。
+尚未验收：新 05 在 `20→05` 与 walk 中是否稳定、新 15 的托盘对准、肩带动的 Z 下降是否进筐且不碰沿、松爪落点。实跑后再调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要用 URDF 代理值冒充真 TCP，也不要加回追灰筐中心的世界 X/Y 目标。
