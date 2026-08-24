@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import sys
 import types
 import unittest
@@ -413,6 +414,42 @@ class PickSpeedScaleTests(SmoothJointInterpolatorTests):
             ) / (2.0 * epsilon)
             peak = max(peak, float(np.abs(rate).max()))
         self.assertLess(peak, 0.080 / (4 * 0.005))
+
+
+class GraspYawAlignTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = ROOT / "action_provider" / "ces_grasp" / "grasp_yaw.py"
+        spec = importlib.util.spec_from_file_location("ces_grasp_yaw_test", path)
+        cls.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+
+    def test_closer_world_x_prefers_plus_x_on_a_tie(self):
+        target, delta = self.module.closer_world_x_yaw(math.pi / 2)
+        self.assertEqual(target, 0.0)
+        self.assertAlmostEqual(delta, -math.pi / 2, places=6)
+
+    def test_already_on_plus_x_is_a_no_op(self):
+        target, delta = self.module.closer_world_x_yaw(0.0)
+        self.assertEqual(target, 0.0)
+        self.assertAlmostEqual(delta, 0.0, places=9)
+
+    def test_pose_30_jaw_squares_onto_world_minus_x(self):
+        """ces_pick_smooth_v1 pose 30 jaw is ~68° off pelvis +X = world −X at pick yaw=π."""
+        pose = read_json(SMOOTH_DIR / "30_pre_grasp_vertical.json")
+        col2 = pose["palm_orientation"]["rotation_matrix"]
+        jx_p, jy_p = float(col2[0][2]), float(col2[1][2])
+        # pick yaw=π: pelvis +X/+Y = world −X/−Y
+        yaw = self.module.jaw_xy_yaw(-jx_p, -jy_p)
+        target, delta = self.module.closer_world_x_yaw(yaw)
+        self.assertAlmostEqual(target, math.pi, places=6)
+        self.assertGreater(abs(delta), math.radians(60.0))
+        self.assertLess(abs(delta), math.radians(80.0))
+        self.assertAlmostEqual(
+            abs(math.degrees(delta)),
+            float(pose["dex1_two_finger_proxy"]["xr_jaw_axis_to_pelvis_x_angle_deg"]),
+            delta=1.0,
+        )
 
 
 if __name__ == "__main__":

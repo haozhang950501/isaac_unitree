@@ -2,7 +2,7 @@
 # License: Apache License, Version 2.0
 """CES LoadingLine 取放状态机。
 
-路点开：SETTLE → GOTO_PICK → UNFOLD(00→30) → DESCEND(锁XY、只落Z、40 仅 q_ref)
+路点开：SETTLE → GOTO_PICK → UNFOLD(00→30) → DESCEND(锁XY、先yaw对齐世界X、再落Z、40 仅 q_ref)
 → GRASP → LIFT → RETURN_HOME(40阶段实时q→30→20→05胸前) → CARRY/HOLD
 → GOTO_PLACE(snap/walk，保持05) → PLACE_HOLD(walk 到站后钉盆冻05)
 → PLACE_APPROACH(人工关节位姿05→15)
@@ -25,9 +25,20 @@ from dataclasses import dataclass
 
 import torch
 
-from isaaclab.utils.math import quat_apply, quat_from_matrix, subtract_frame_transforms
+from isaaclab.utils.math import (
+    quat_apply,
+    quat_from_angle_axis,
+    quat_from_matrix,
+    quat_mul,
+    subtract_frame_transforms,
+)
 
 from action_provider.ces_grasp import constants as C
+from action_provider.ces_grasp.grasp_yaw import (
+    YAW_ALIGN_SKIP_RAD,
+    closer_world_x_yaw,
+    jaw_xy_yaw,
+)
 from action_provider.ces_grasp.navigation import LegWalkPlanner
 from action_provider.ces_grasp.place_policy import PLACE_DESCEND_POS_AXES, z_only_descend_goal
 from action_provider.ces_grasp.pose_library import CesWaypointSet, load_waypoint_set
@@ -644,8 +655,8 @@ class CesPickPlaceStateMachine:
         self._grasp_arm_q = self.ctx.get_right_arm_q()[0].clone()
         if self.use_joint_waypoints:
             pb = self._log_tcp("descend_end")
+            now_w, q_end = self.ctx.ik.get_tcp_pose_w()
             if self._verify_descend_xy is not None:
-                now_w, _ = self.ctx.ik.get_tcp_pose_w()
                 dxy = math.hypot(
                     float(now_w[0, 0]) - self._verify_descend_xy[0],
                     float(now_w[0, 1]) - self._verify_descend_xy[1],
@@ -654,6 +665,12 @@ class CesPickPlaceStateMachine:
                     f"[ces_verify] descend hold_xy dxy={dxy*1000:.1f}mm "
                     f"z_b={pb[2]:.4f} (target 0.101)"
                 )
+            yaw_end = self._hand_jaw_yaw(q_end)
+            _tgt, yaw_err = closer_world_x_yaw(yaw_end)
+            print(
+                f"[ces_verify] descend jaw_yaw={math.degrees(yaw_end):+.1f}deg "
+                f"err_to_world_X={math.degrees(yaw_err):+.1f}deg"
+            )
         self._transition(CesPickPlacePhase.GRASP)
 
     def _begin_joint_lift(self):
@@ -950,25 +967,55 @@ class CesPickPlaceStateMachine:
             f"hover=({h[0]:.3f},{h[1]:.3f},{h[2]:.3f}) dur={self.interp.duration:.2f}s"
         )
 
+    def _hand_jaw_yaw(self, quat_w: torch.Tensor) -> float:
+        """Yaw of Dex1 jaw (hand +X) in the world XY plane."""
+        axis = torch.tensor(
+            [[1.0, 0.0, 0.0]], device=quat_w.device, dtype=quat_w.dtype
+        )
+        jaw = quat_apply(quat_w, axis)
+        return jaw_xy_yaw(float(jaw[0, 0]), float(jaw[0, 1]))
+
+    def _yaw_align_grasp_quat(self, live_quat: torch.Tensor) -> tuple[torch.Tensor, float, float]:
+        """Rotate the live hand about world Z onto the nearer of world ±X."""
+        yaw = self._hand_jaw_yaw(live_quat)
+        target, delta = closer_world_x_yaw(yaw)
+        axis = torch.tensor(
+            [[0.0, 0.0, 1.0]], device=live_quat.device, dtype=live_quat.dtype
+        )
+        dq = quat_from_angle_axis(live_quat.new_tensor([delta]), axis)
+        return quat_mul(dq, live_quat), target, delta
+
     def _begin_descend(self, reason: str):
         hover = self._offset_z(self._grasp_pos_w, C.APPROACH_HEIGHT)
         err = self.ctx.ik.position_error_norm(hover)
         now, q_now = self.ctx.ik.get_tcp_pose_w()
         if self.use_joint_waypoints:
-            # Z-only drop.  Do not retarget orientation to top_down_grasp_quat
-            # (that made DiffIK twist shoulder/elbow).  Pose 40 is q_ref only.
+            # Hover, slerp jaw onto world ±X, then Z-only drop.  Do not snap
+            # orientation on the first frame (that twisted shoulder/elbow).
+            # Pose 40 stays q_ref only, and only during the drop leg.
             planned_z = float(self._grasp_pos_w[0, 2])
             goal = now.clone()
             goal[:, 2] = planned_z
             self._grasp_pos_w = goal.clone()
-            self._grasp_quat_w = q_now.clone()
-            self._carry_quat_w = q_now.clone()
+            aligned, target_yaw, delta = self._yaw_align_grasp_quat(q_now)
+            self._grasp_quat_w = aligned
+            self._carry_quat_w = aligned.clone()
             self._verify_descend_xy = (float(now[0, 0]), float(now[0, 1]))
-            self.interp.reset(now, goal, C.DESCEND_TIME, q_now, q_now)
+            align_t = (
+                1e-3 if abs(delta) < YAW_ALIGN_SKIP_RAD else C.GRASP_YAW_ALIGN_TIME
+            )
+            self.interp.reset_path(
+                [now, now.clone(), goal],
+                [align_t, C.DESCEND_TIME],
+                quats=[q_now, aligned, aligned],
+            )
+            axis_name = "+X" if abs(target_yaw) < 1e-6 else "-X"
             print(
-                f"[ces_fsm] waypoint handoff ({reason}) vertical descend "
-                f"z={float(now[0, 2]):.3f}->{planned_z:.3f} "
-                f"(hold XY+orientation from 30; 40 is q_ref only)"
+                f"[ces_fsm] waypoint handoff ({reason}) yaw-align then descend "
+                f"jaw_yaw={math.degrees(self._hand_jaw_yaw(q_now)):+.1f}deg "
+                f"-> world {axis_name} ({math.degrees(delta):+.1f}deg, "
+                f"{align_t:.2f}s) z={float(now[0, 2]):.3f}->{planned_z:.3f} "
+                f"(hold XY from 30; 40 is q_ref on the drop)"
             )
             self._log_tcp("handoff30")
             live_q = self.ctx.get_right_arm_q()[0]
@@ -1209,12 +1256,21 @@ class CesPickPlaceStateMachine:
         return self._place_raise_q if self._place_raise_q is not None else self._carry_arm_q
 
     def _q_ref_for_descend(self) -> torch.Tensor | None:
-        """30→40 只作零空间提示，不作 arm_q。"""
+        """30→40 只作零空间提示，不作 arm_q。
+
+        Yaw-align hover keeps q_ref at 30 so the null space does not pull
+        the shoulder while the wrist/yaw is still rotating.  The 30→40 lerp
+        starts only on the Z-drop leg.
+        """
         if self._q_wp30 is None or self._q_wp40 is None:
             return None
         if not self.interp.has_path:
             return self._q_wp40
-        s = min(1.0, self.interp.elapsed / max(self.interp.duration, 1e-6))
+        align_end = self.interp.bounds[0] if len(self.interp.bounds) >= 2 else 0.0
+        if self.interp.elapsed < align_end:
+            return self._q_wp30
+        drop_len = max(1e-6, self.interp.duration - align_end)
+        s = min(1.0, (self.interp.elapsed - align_end) / drop_len)
         return lerp(self._q_wp30, self._q_wp40, ease_in_out(s))
 
     def step(self) -> CesCommand:
@@ -1354,14 +1410,17 @@ class CesPickPlaceStateMachine:
                     f"[ces_verify] descend q_ref_only (arm_q is None) "
                     f"q_ref={self._fmt_q(q_ref)}{dw}"
                 )
-            if self.interp.finished or self.t > C.DESCEND_TIME + C.GRASP_WAIT_MAX:
+            descend_limit = (
+                self.interp.duration if self.interp.has_path else C.DESCEND_TIME
+            ) + C.GRASP_WAIT_MAX
+            if self.interp.finished or self.t > descend_limit:
                 err = self.ctx.ik.position_error_norm(self._grasp_pos_w)
                 pos, quat = self._grasp_pos_w, self._grasp_quat_w
                 # Waypoint descend already holds XY from 30; do not wait on TCP tol.
                 if (
                     self.use_joint_waypoints
                     or err < C.GRASP_POS_TOL
-                    or self.t > C.DESCEND_TIME + C.GRASP_WAIT_MAX
+                    or self.t > descend_limit
                 ):
                     self._start_grasp(err)
             return self._cmd(tcp=pos, quat=quat, arm_q_ref=q_ref)

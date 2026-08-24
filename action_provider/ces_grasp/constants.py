@@ -88,6 +88,9 @@ UNFOLD_TIME = 3.2
 ORIENT_TIME = 2.2
 SLIDE_TIME = 2.4
 DESCEND_TIME = 1.1
+# Pose 30 leaves the Dex1 jaw ~68° off world X.  Hover (lock XY/Z) and slerp
+# yaw onto ±X before the Z drop, so DiffIK does not twist while entering the tray.
+GRASP_YAW_ALIGN_TIME = 0.55
 GRASP_TIME = 1.0
 GRASP_POS_TOL = 0.055
 GRASP_WAIT_MAX = 0.6
