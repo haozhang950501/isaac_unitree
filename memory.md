@@ -1,8 +1,8 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-24（pick/walk 夹持已稳住；walk 到站钉**实际骨盆完整四元数**。05 与 15 已在 `urdf_pose_toolkit` 重新人工设计并仅替换 Unitree 姿态 q；下一步在阿里云复验新姿态的全流程夹持、避碰与落筐。见 §6.7、§11。）
+更新时间：2026-08-24 晚（pick 已归档 `pick_baseline_ok`。Walk / 钉盆夹持 / 桌面高度与松爪落差已调。**15 放置姿态用户不满意，本版原样留下，下一阶段重做 15。**）
 
-**下一阶段：在阿里云 Isaac Sim 实跑新 `40(live)→30→20→05→walk→15→Z-only IK（XY 不锁）→release`**，重点验产品是否刮抽屉/碰胸、walk 是否稳、15 是否对准托盘以及肩带动下降/松爪是否碰沿。夹持和定盘不要为了够着灰筐去改。见 §11。
+**下一阶段：重做 Place 姿态 `15_place_forward_release`。** Pick、walk、钉盆夹持、桌高不要为了迁就旧 15 去改。当前 15 q 只是占位，见 §11。
 
 ## 1. 项目概况
 
@@ -27,9 +27,12 @@
 - **pick→walk 禁止先往前凑步**（2026-08-24）：只发满幅 S 不够。松钉第一帧必须 `actor_obs_buffer.reset()` + 骨盆/产品后退 kick，否则策略会先朝 CES 走两步再后退。见 §6.6。
 - **Place 已改为人工 q + Z-only IK**：05→15 用清单关节插补；15 后只跟踪世界 Z，肩膀可转，X/Y 允许偏移，不追灰筐中心。pose 25 已取消，见 §11。
 - **walk→place 夹持已稳住**（2026-08-24 傍晚 Isaac Sim）：到站钉实际 XY/Z **加上走路残留的完整四元数**，手臂只 PD、夹爪锁 `0.019`、钉盆时不跑步态。旧的纯 yaw 钉盆会把夹爪甩开。见 §6.7。
-- 本次新 q 的清单加载、`05→15` 插补和 Z-only 策略 4 项专项测试通过；全套 45 项中 44 项通过，唯一失败是旧测试仍写死上一版 05/15 q。按“只改姿态 q 和记忆”的边界暂不改测试。导航仍含 900 组撞桌扫描（§6.2 末）。
+- **Pick 已归档 `pick_baseline_ok`（`822b4e2`）**：DESCEND 先在 30 高度 slerp 夹爪偏航到世界 ±X，再锁 XY 只落 Z。Isaac Sim 确认夹爪沿产品短边夹。
+- **桌面 +6 cm、松爪贴近筐底**（2026-08-24 晚）：`TABLE_TOP_EXTRA_Z=0.06`，桌面约 0.68 m（`scale_z≈0.681`）。完整 `scale_z=1`（桌面约 0.99 m）用户说太高，已否决。`PLACE_FINAL_TCP_Z = TABLE_TOP_Z + 0.025`，不再停在筐沿上方 20 mm（件会再掉进约 10 cm 深的灰筐）。
+- **15 放置姿态未定稿**：用户明确不满意当前 15，本版 **不改 15 的 q**，标记为遗留。下一阶段只重做 15。05 胸前姿态本轮可用，不要顺手改。
+- 导航仍含 900 组撞桌扫描（§6.2 末）。
 
-**当前 05 / 15 已由用户重新人工定稿并写入运行项目**。目前只完成 URDF-viz 回放和 CPU 静态接入，尚未完成 Isaac Sim 物理验收；定盘、夹爪和最终仅补偿 Z 的逻辑均未改变。
+**当前 05 可用、15 不满意留下。** 05 已在 Isaac Sim 走过 walk；15 仍是 2026-08-24 下午那版人工 q，用户 2026-08-24 晚说姿态不满意，下一阶段重做，本提交不改 15 文件。
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
@@ -39,7 +42,7 @@
 
 **2026-08-24 回收 V2（历史 q，已被本轮定稿替代）**：用户曾在 `urdf_pose_toolkit/poses/ces_return_to_chest_v2/` 保存 05，q=`[-0.75999993,-0.26,+0.58,-0.68999976,-0.34,-0.05000001,+0.08999996]`，URDF 关节限位最小余量 `0.3572 rad`。正式路径保持 `40(live)→30→20→05`：40 使用抬起后实时 q，不硬下发 authored q_ref；`40(live)→30` 单独用 smoothstep 前导段；到 30 后再按单调三次 Hermite `30→20→05` 退出抽屉。路径与时长不变，只是终点 05 已在本轮再次替换。
 
-**2026-08-24 最终 05/15 人工重设计**：新 05 q=`[-0.04000009,-0.34000003,+0.52000004,-0.7499997,-0.34,-0.09,+0.90999967]`，URDF 最小关节限位余量 `0.2972 rad`；新 15 q=`[-1.2266918,-0.17189792,+1.5731673,+0.8398857,+0.017243762,+0.06550017,+1.0793102]`，余量 `0.5351 rad`。URDF-viz 已分别完成 `30→20→05` 与 `05→15` 回放；后者 3.2 s、代理 TCP 路径最大误差约 `0.352 mm`。Unitree 仅替换两个 JSON 的 q，状态机、清单、夹持和 Z-only IK 未改。
+**2026-08-24 05 定稿、15 留下**：05 q=`[-0.04000009,-0.34000003,+0.52000004,-0.7499997,-0.34,-0.09,+0.90999967]`，walk 持物可用。15 q 仍是下午那版 `[-1.2266918,-0.17189792,+1.5731673,+0.8398857,+0.017243762,+0.06550017,+1.0793102]`，当晚用户不满意，**不作为定稿**，见 `15pose_left` / §11。
 
 **2026-08-24 pick→walk 先往前两步**：阿里云复测，发了满幅 `vx=-0.45` 仍先朝 CES 走两步再后退。不是没发 S，也不是该再等站稳。根因是 10 帧观测栈在 pick 阶段全是 `vx=0`，策略把松钉当成站立起步。修法见 §6.6，**不要回退成等站稳**。
 
@@ -165,7 +168,7 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
 - 夹住后：手臂改走 PD（不再瞬移关节），Dex1 只走 PD 闭合，靠垫面摩擦把件提起。
 - 换站：`walk` 走真实步态（§6）；`snap` 仅作对照，瞬移骨盆时才把零件跟着平移（不是每帧焊 TCP）。
-- 放置：`05→15` 关节插补后只做世界 Z 的位置 IK，肩膀可带动手臂下压，X/Y 允许偏移（不追灰筐中心）。初始目标是灰筐沿上方 20 mm（§11）。
+- 放置：`05→15` 关节插补后只做世界 Z 的位置 IK，肩膀可带动手臂下压，X/Y 允许偏移（不追灰筐中心）。松爪目标是桌面/筐底上方 25 mm（§11）。**15 姿态待重做。**
 - `r`：`env.reset()` + `reset_object_self` 把 Product 写回托盘，并 `CESGrasp.reset_task()`。
 
 ### 3.2 踩过的坑（不要再走）
@@ -221,7 +224,8 @@ tools/probe_ces_workspace.py
 ces_machine spawn ≈ (-3.957, -1.822, 0.961)，yaw = 0°
 Product 世界位姿  ≈ (-3.487, -0.950, 0.821)，yaw = +90°
 LoadingLine 底高  z = 0.6173
-packing_table     ≈ (-2.087, -0.372, 0)，yaw = +180°，scale_z≈0.621
+packing_table     ≈ (-2.087, -0.372, 0)，yaw = +180°，scale_z≈0.681
+                  （桌面 z≈0.677 = LoadingLine 底 0.617 + 6 cm；完整 0.99 m 太高已否）
                   （相对上料口 +0.45 X / +0.23 Y；2026-08-24 桌 −Y 12 cm，放置站不跟）
 机器人初始        ≈ (-2.037, -2.302, 0.8)，朝 -X
 PerspectiveCamera 在机器人身后约 1.15 m，朝 -X 看向 CES 正面
@@ -282,7 +286,9 @@ place x_b=0.46  y_b=-0.18  yaw=π/2   stand ≈ (-2.27, -0.77)
 PLACE_TARGET_XY = 桌心 −X 15 cm、近沿对齐后再 +Y 3 cm ≈ (-2.237, -0.476)
 # 放置站仍按桌 Y 偏移前的位置算 (-2.267, -0.772)，不跟着桌子走
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.08
+PLACE_FINAL_TCP_Z = TABLE_TOP_Z + 0.025   # 筐底上方约 25 mm，一丝自由落体
 # 灰筐 container_h20 留在桌上；不要贴桌 IK，会抖
+# 15 姿态未定稿，见 §11
 ```
 
 ### 5.4 物理（摩擦拆开，combine=max）
@@ -399,9 +405,12 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 - [x] 2026-08-23 walk优化：转弧→前进不停、直接发 W；pick 完立刻满幅 S，不等站稳；walk→place 夹爪目标锁死、到站钉实际骨盆 Z；托盘 −X 15 cm、站位不动
 - [x] 2026-08-24 pick→walk 直接后退：清空 10 帧站立观测 + 骨盆/产品后退 kick（§6.6）。**满幅 S 单独不够。**
 - [x] 2026-08-24 walk→place 夹持：到站钉 live quat，手臂 PD、夹爪锁死、钉盆不跑步态（§6.7）。Isaac Sim 确认件不再掉。
+- [x] 2026-08-24 `pick_baseline_ok`：DESCEND 先 yaw 对齐世界 X 再落 Z；夹爪沿产品短边夹。
+- [x] 2026-08-24 桌面 +6 cm、松爪改贴筐底（`PLACE_FINAL_TCP_Z = TABLE_TOP_Z + 0.025`）。完整桌高 0.99 m 太高，不要再拉回。
+- [x] **人工重设计 05 胸前姿态**：walk 持物可用。
+- [ ] **重做 15 放置终点**：当前 `15_place_forward_release` 用户不满意，本版原样留下（`15pose_left`）。不要为了迁就旧 15 去改钉盆 / 夹爪 / 桌高 / pick。
 - [ ] 按日志 `coast` 把 `WALK_STOP_MARGIN_PLACE` 从 0.30 收到 `coast + 0.05`，压掉最坏情况 75 cm 的前伸
 - [ ] 到站 `dxy` 落在 ~10 cm 内、`along>0`、`on_target` 不报 off-target
-- [x] **人工重设计 05 胸前姿态和 15 放置终点**：URDF-viz 回放完成，两个 q 已接入 Unitree；Isaac Sim 物理验收仍待完成（见 §11）
 
 ### 6.5 HOLD 快照（给 walk 到 place 的双足控制）
 
@@ -709,25 +718,25 @@ AABB Y 比 `PRODUCT_POS` 偏 −11 mm。夹爪闭合、站稳、抬臂完成；l
 
 ## 11. Place：人工 05→15 + Unitree 纯 Z 补偿（2026-08-24）
 
-### 11.1 当前定稿关节路径（待 Isaac Sim 物理验收）
+### 11.1 当前关节路径（05 可用；15 不满意，留下待重做）
 
-Place 只保留两个人工关节姿态，不使用 25。2026-08-24 傍晚 Isaac Sim 曾用上一版 q 确认 walk 到站钉 live quat 后 05→15 件不再掉；本轮用户重新设计了 05 和 15，因此旧物理结论不能自动沿用，必须重新实跑。
+Place 只保留两个人工关节姿态，不使用 25。2026-08-24 傍晚 Isaac Sim 曾用上一版 q 确认 walk 到站钉 live quat 后 05→15 件不再掉。下午重设计的 05 已用于 walk，**晚间用户明确不满意 15 展开姿态**，本提交 `15pose_left` **不改 15 的 q**，只把桌面抬高、把松爪改到筐底附近，并把 15 标成下一阶段唯一主线。
 
 ```text
 05_chest_carry = (-0.04000009, -0.34000003, +0.52000004, -0.74999970, -0.34000000, -0.09000000, +0.90999967)
 15_place_forward_release = (-1.2266918, -0.17189792, +1.5731673, +0.8398857, +0.017243762, +0.06550017, +1.0793102)
+  ↑ 占位，用户不满意，下一阶段在 urdf_pose_toolkit 重做后再只替换这个 q
 ```
 
-05/15 分别源自 `urdf_pose_toolkit/poses/ces_return_to_chest_v2/05_chest_carry_draft.json` 与 `urdf_pose_toolkit/poses/ces_place_from_05_v1/15_forward_extend_draft.json` 的用户人工保存值，URDF 最小关节限位余量分别为 `0.2972 / 0.5351 rad`。正式文件是 `ces_pick_smooth_v1/05_chest_carry.json` 与 `15_place_forward_release.json`。按用户要求，Unitree 中只替换 q，JSON 内旧的采集时间和 FK 静态说明未同步，且不参与运行时控制。
+05 源自 `urdf_pose_toolkit/poses/ces_return_to_chest_v2/05_chest_carry_draft.json`；15 源自 `ces_place_from_05_v1/15_forward_extend_draft.json`（占位，待重做）。正式文件是 `ces_pick_smooth_v1/05_chest_carry.json` 与 `15_place_forward_release.json`。重做 15 时只替换 q。
 
 `trajectory_manifest.json::place_path` 定义 `05→15`，原始时长 `3.2 s`、`segment_smoothstep` 起止停稳；默认 1.5× 后约 `2.13 s`。snap 换站不再先走旧 `PLACE_PRE_RAISE_Q`，而是保持胸前 05 到放置站后再执行 05→15。
 
-**本轮重做约束与后续验收：**
+**本轮约束与后续验收：**
 
-- 新 q 已在 `urdf_pose_toolkit` 保存，并仅替换 `ces_pick_smooth_v1/05_chest_carry.json` 与 `15_place_forward_release.json` 的 q；manifest 的 `place_path` / `return` 终点名称未变。
-- 本地回放已确认 `30→20→05` 到达新 05；`05→15` 用 3.2 s 回放，到达误差为 0、无关节限位，代理 TCP 路径最大误差约 `0.352 mm`。
-- **不要**为了够着灰筐去改钉盆、夹爪 kp、或重新加入世界 X/Y IK。夹持通道已经稳住。
-- 05 仍是 walk 全程持物姿态，也是回收终点；改 05 等于同时改 walk 平衡，需在 Isaac Sim 再验后退/转弧。
+- **下一阶段只重做 15。** 不要为了让旧 15 够着灰筐去改钉盆、夹爪 kp、桌高、或重新加入世界 X/Y IK。
+- 05 仍是 walk 全程持物姿态，也是回收终点；改 05 等于同时改 walk 平衡，15 重做时尽量别动 05。
+- 桌面已 +6 cm（`TABLE_TOP_EXTRA_Z=0.06`）。完整桌高 0.99 m 用户否决，不要再拉回去。
 
 ### 11.2 15 后的 Z-only IK（肩可转，XY 不锁）
 
@@ -736,7 +745,7 @@ Place 只保留两个人工关节姿态，不使用 25。2026-08-24 傍晚 Isaac
 ```text
 task = world Z only
 goal.z = min(live_tcp_after_15.z, PLACE_FINAL_TCP_Z)
-PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.020
+PLACE_FINAL_TCP_Z = TABLE_TOP_Z + 0.025
 q_ref = pose 15（零空间，腕保持）
 肩 pitch/roll/yaw 窗口放开，腕仍锁在 15 附近
 ```
@@ -744,13 +753,13 @@ q_ref = pose 15（零空间，腕保持）
 - 不追 `PLACE_TARGET_XY`。下降时肩膀旋转把手臂往下靠，TCP 的 X/Y 可以跟着偏。
 - Z 仍用 `CartesianInterpolator` smoothstep；不给朝向目标。
 - “只降不升”：如果真实 15 已经低于目标 Z，则目标等于当前 Z，不反向抬手。
-- 初始目标是灰筐上沿上方 `20 mm`。只在阿里云看清产品底面、指垫和筐沿后调 `PLACE_FINAL_TCP_ABOVE_TRAY`。
+- 松爪目标是**桌面/筐底上方 25 mm**（产品半高约 13 mm，剩下约 1 cm 自由落体）。以前停在筐沿上方 20 mm，件会再掉进约 10 cm 深的灰筐。
 - RELEASE 后先逆向回到 15，再回胸前 05；夹持阶段含 Z 下降全程保持 `GRIPPER_CLOSED`。
 
 ### 11.3 验证边界
 
-新 q 接入后，清单加载、`05→15` smoothstep、纯 Z 目标保持 X/Y且绝不抬升等 4 项专项测试通过。全套 45 项中 44 项通过；唯一失败是 `test_selected_waypoint_q_values_match_natural_v2` 仍写死上一版 05/15 q。按本次只改姿态 q 和记忆的要求，测试文件未修改。
+新 q 接入后，清单加载、`05→15` smoothstep、纯 Z 目标保持 X/Y 且绝不抬升等专项测试在。全套里旧测试仍可能写死上一版 05 q，按边界可不改。
 
-**Isaac Sim 历史基线（2026-08-24 傍晚，上一版 05/15）**：pick → walk（直接后退，不再先往 CES 凑步）→ 到站钉 live quat → PLACE_HOLD → 05→15，产品不再脱落。Walk 期间腰必须保持默认指令，否则上身会歪。新 q 尚未复验。
+**Isaac Sim 已确认（截至 2026-08-24 晚 `15pose_left`）**：pick（含 yaw 对齐）→ walk（直接后退）→ 到站钉 live quat → PLACE_HOLD → 05 持物稳定。桌面已抬高，松爪改贴筐底。
 
-尚未验收：新 05 在 `20→05` 与 walk 中是否稳定、新 15 的托盘对准、肩带动的 Z 下降是否进筐且不碰沿、松爪落点。实跑后再调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要用 URDF 代理值冒充真 TCP，也不要加回追灰筐中心的世界 X/Y 目标。
+**留下未做：15 展开姿态。** 用户不满意当前 `15_place_forward_release`。重做时只替换该 JSON 的 q，状态机、钉盆、夹爪和 Z-only IK 默认不动。不要用 URDF 代理值冒充真 TCP，也不要加回追灰筐中心的世界 X/Y 目标。

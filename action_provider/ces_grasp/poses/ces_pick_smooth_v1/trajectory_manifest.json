@@ -138,7 +138,7 @@
       "xy_policy": "allow_xy_drift",
       "z_policy": "descend_only_to_scene_tray_clearance",
       "target_constant": "PLACE_FINAL_TCP_Z",
-      "target_clearance_above_tray_m": 0.02,
+      "target_clearance_above_table_m": 0.025,
       "orientation_target": null,
       "q_ref": "15_place_forward_release",
       "duration_s": 1.2

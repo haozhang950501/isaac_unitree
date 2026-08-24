@@ -32,8 +32,11 @@ CES_SPAWN_Z = 0.9610
 LOADING_LINE_BOTTOM_Z = 0.6173
 
 _TABLE_LOCAL_HEIGHT = 0.9941
-TABLE_SCALE_Z = LOADING_LINE_BOTTOM_Z / _TABLE_LOCAL_HEIGHT  # ≈ 0.621
-TABLE_TOP_Z = LOADING_LINE_BOTTOM_Z
+# LoadingLine 底面约 0.62 m；原始桌高 0.99 m 看着太高。
+# 桌面略抬，让 Place 松爪离筐底只剩一丝空隙（不要再拉回 scale_z=1）。
+TABLE_TOP_EXTRA_Z = 0.06
+TABLE_TOP_Z = LOADING_LINE_BOTTOM_Z + TABLE_TOP_EXTRA_Z
+TABLE_SCALE_Z = TABLE_TOP_Z / _TABLE_LOCAL_HEIGHT  # ≈ 0.681
 # Authored gray tote on the packing table (container_h20).  World height
 # follows the same Z scale as the table.
 _PLACE_TRAY_LOCAL_HEIGHT = 0.16

@@ -68,8 +68,9 @@ GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
 # 旧 Place 回退：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
 PLACE_RELEASE_ABOVE_TABLE = 0.08
 # 新 05→15 Place：15 展开后只跟世界 Z 往下压，肩膀可转，X/Y 允许偏移。
-# 初始目标让 TCP 停在灰筐上沿 20 mm；阿里云实测前的保守可调值。
-PLACE_FINAL_TCP_ABOVE_TRAY = 0.020
+# 松爪贴近桌面/筐底（产品半高约 13 mm），剩下就是很短的自由落体。
+# 以前停在筐沿上方 20 mm，件会再掉进约 10 cm 深的灰筐。
+PLACE_FINAL_TCP_ABOVE_FLOOR = 0.025
 
 # 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
 # _apply_snap 每帧把骨盆写成 STAND_PELVIS_Z、速度清零，所以 is_standing()
@@ -277,7 +278,7 @@ PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_
 PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
 # Smooth V1 在 15 到位后只向下逼近这个世界 Z；X/Y 不锁，肩膀可带动手臂下压。
 # 若 15 已经低于该高度，状态机不会反向抬升，也不会继续向下压。
-PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_FINAL_TCP_ABOVE_TRAY
+PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_FINAL_TCP_ABOVE_FLOOR
 
 # HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
 # ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）

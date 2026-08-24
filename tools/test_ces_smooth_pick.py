@@ -136,7 +136,7 @@ class SmoothPickManifestTests(unittest.TestCase):
         )
         self.assertIsNone(vertical["orientation_target"])
         self.assertEqual(vertical["q_ref"], PLACE_POSE)
-        self.assertEqual(float(vertical["target_clearance_above_tray_m"]), 0.02)
+        self.assertEqual(float(vertical["target_clearance_above_table_m"]), 0.025)
         self.assertGreater(float(vertical["duration_s"]), 0.0)
         place_validation = manifest["validation"]["place_path"]
         self.assertTrue(place_validation["validation_passed"])
