@@ -88,13 +88,13 @@ APPROACH_TIME = 2.8
 UNFOLD_TIME = 3.2
 ORIENT_TIME = 2.2
 SLIDE_TIME = 2.4
-DESCEND_TIME = 1.1
+DESCEND_TIME = 0.70
 # Pose 30 leaves the Dex1 jaw ~68° off world X.  Hover (lock XY/Z) and slerp
 # yaw onto ±X before the Z drop, so DiffIK does not twist while entering the tray.
-GRASP_YAW_ALIGN_TIME = 0.55
-GRASP_TIME = 1.0
+GRASP_YAW_ALIGN_TIME = 0.35
+GRASP_TIME = 0.60
 GRASP_POS_TOL = 0.055
-GRASP_WAIT_MAX = 0.6
+GRASP_WAIT_MAX = 0.25
 LIFT_TIME = 2.2
 # 旧清单回退：抬起后先从实时 q 过渡到第一个逆向路点。smooth_v1 已把同一
 # 0.8 s 写进 manifest 的 40(live)→30 return segment，随后走30→20→05避开抽屉边缘。
@@ -119,8 +119,10 @@ PLACE_YAW_WINDOW = 0.50
 PLACE_WRIST_WINDOW = 0.30
 PLACE_ELBOW_MIN = 0.20  # 肘不许伸直锁死
 PLACE_DESCEND_TIME = 1.2
+# 15 到位后直接松爪自由落体，不再做 Z-only IK（下降会碰灰筐沿）。
+PLACE_RELEASE_FROM_15 = True
 RELEASE_TIME = 0.8
-# 收臂：按放置轨迹的逆序（灰筐上方 → 抬臂点 → 携带姿态），别横扫桌沿。
+# 收臂：15 → 胸前 05。
 RETRACT_TIME = 1.6
 RETRACT_HOME_TIME = 1.6
 
@@ -210,9 +212,8 @@ WALK_YAW_ARRIVE_FINAL = WALK_ALIGN_YAW
 WALK_REALIGN_YAW = 0.60  # 歪太多：停下平移，先转正
 WALK_LEG_SETTLE = 0.5  # 每段之间零指令停稳，避免后退接右转时混合指令
 WALK_ARRIVE_HOLD = 0.35
-# walk 到站后先钉盆、冻 05、夹爪不动，再开始 05→15。用来分流：
-# 一钉就掉 = 动态根切运动学钉盆打断接触；钉住还能拿着、一伸 15 才掉 = 关节轨迹。
-WALK_PLACE_HOLD_TIME = 1.5
+# walk 到站钉盆后只短暂冻 05。1.5 s 太长；钉盆本身已刹住摇摆。
+WALK_PLACE_HOLD_TIME = 0.45
 WALK_PLACE_TIMEOUT = 60.0
 WALK_GOTO_TIMEOUT = 20.0
 WALK_VX_ACCEL = 1.00

@@ -6,7 +6,8 @@
 → GRASP → LIFT → RETURN_HOME(40阶段实时q→30→20→05胸前) → CARRY/HOLD
 → GOTO_PLACE(snap/walk，保持05) → PLACE_HOLD(walk 到站后钉盆冻05)
 → PLACE_APPROACH(人工关节位姿05→15)
-→ PLACE_DESCEND(Unitree IK只跟Z、肩可转、允许XY偏移) → RELEASE → RETRACT(逆序回05)。
+→ RELEASE(15 到位即松爪自由落体) → RETRACT(15→05)。
+不再做 PLACE_DESCEND（Z-only IK 会碰筐沿）。
 
 机器人 spawn 就在抓取站，SETTLE/GOTO_PICK 只是把骨盆钉在原地，不瞬移。
 
@@ -887,22 +888,15 @@ class CesPickPlaceStateMachine:
             self._log_tcp("place_raise")
 
     def _begin_retract(self):
-        """按放置轨迹的逆序收臂：灰筐上方 → 抬臂点 → 胸前携带姿态。"""
+        """Place 收臂：15 → 胸前 05。"""
         q_now = self.ctx.get_right_arm_q()[0].clone()
         home = self._carry_arm_q if self._carry_arm_q is not None else self._home_arm_q()
-        qs, durations, names = [q_now], [], []
-        if self._place_raise_q is not None:
-            qs.append(self._place_raise_q)
-            durations.append(C.RETRACT_TIME)
-            names.append("raise")
-        qs.append(home)
-        durations.append(C.RETRACT_HOME_TIME)
-        names.append("carry")
+        dur = C.RETRACT_TIME + C.RETRACT_HOME_TIME
         self._place_arm_q = home.clone()
-        self.joint_interp.reset_path(qs, durations)
+        self.joint_interp.reset(q_now, home, dur)
         print(
-            f"[ces_fsm] retract arm (reverse) {'→'.join(names)} "
-            f"dur={sum(durations):.2f}s"
+            f"[ces_fsm] retract 15→05 q={self._fmt_q(q_now)} → {self._fmt_q(home)} "
+            f"dur={dur:.2f}s"
         )
 
     def _maybe_log(self, extra: str = ""):
@@ -1147,9 +1141,9 @@ class CesPickPlaceStateMachine:
     def _begin_place_approach(self):
         """Start the manifest 05→15 Place path, or the legacy Cartesian path.
 
-        Smooth V1 uses the user-authored joint pose 15.  After that joint
-        segment, Unitree reads the live TCP and lowers it with Z-only
-        position IK: the shoulder may rotate the arm down, and X/Y may drift.
+        Smooth V1 uses the user-authored joint pose 15.  With
+        ``PLACE_RELEASE_FROM_15`` the gripper opens there and the product
+        free-falls; otherwise Unitree lowers Z-only after 15.
 
         旧清单仍走两段笛卡尔路径：① 贴身抬臂（只往前挪一点点，避免死折肘）先升到放置
         高度，桌沿和灰筐沿都在手下方；② 保持这个高度水平伸过去。所以件永远
@@ -1714,11 +1708,20 @@ class CesPickPlaceStateMachine:
                     or self.t > self._place_joint_total_time + 1.0
                 ):
                     self._place_raise_q = q.clone()
-                    print(
-                        f"[ces_fsm] Place pose 15 reached q={self._fmt_q(q)} — "
-                        "next: Z-only IK, shoulder may lower, XY unlocked"
-                    )
-                    self._transition(CesPickPlacePhase.PLACE_DESCEND)
+                    self._place_arm_q = q.clone()
+                    if C.PLACE_RELEASE_FROM_15:
+                        print(
+                            f"[ces_fsm] Place pose 15 reached q={self._fmt_q(q)} — "
+                            "open gripper at 15, product free-falls (skip Z IK)"
+                        )
+                        self._log_tcp("place_release")
+                        self._transition(CesPickPlacePhase.RELEASE)
+                    else:
+                        print(
+                            f"[ces_fsm] Place pose 15 reached q={self._fmt_q(q)} — "
+                            "next: Z-only IK, shoulder may lower, XY unlocked"
+                        )
+                        self._transition(CesPickPlacePhase.PLACE_DESCEND)
                 return self._place_body_cmd(tcp=None, arm_q=q)
 
             drop = self._place_pos_w if self._place_pos_w is not None else self._place_drop_pos()
@@ -1743,6 +1746,12 @@ class CesPickPlaceStateMachine:
             )
 
         if self.phase is CesPickPlacePhase.PLACE_DESCEND:
+            if C.PLACE_RELEASE_FROM_15:
+                self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
+                print("[ces_fsm] skip place-descend — release at pose 15")
+                self._log_tcp("place_release")
+                self._transition(CesPickPlacePhase.RELEASE)
+                return self._place_body_cmd(arm_q=self._place_arm_q)
             if self._using_place_joint_path:
                 self.gripper = C.GRIPPER_CLOSED
                 if not self._place_descend_started:
@@ -1801,7 +1810,7 @@ class CesPickPlaceStateMachine:
                 q = self._frozen_place_arm()
             if self.joint_interp.finished or self.t > self.joint_interp.duration + 1.0:
                 self._place_arm_q = q.clone()
-                print("[ces_fsm] arm back at carry posture — task done")
+                print("[ces_fsm] arm back at 05 carry — task done")
                 self._log_place_result("task_done")
                 self._transition(CesPickPlacePhase.DONE)
             return self._place_body_cmd(tcp=None, arm_q=q)

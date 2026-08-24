@@ -78,8 +78,11 @@ parser.add_argument("--camera_exclude", type=str, default="world_camera", help="
 parser.add_argument(
     "--viewport_camera",
     type=str,
-    default="none",
-    help="viewport camera after start: none (keep editor view, default), perspective, front_cam, or a full prim path",
+    default="robot",
+    help=(
+        "viewport camera after start: robot (PerspectiveCamera_robot, default), "
+        "perspective, front_cam, none, or a full prim path"
+    ),
 )
 
 parser.add_argument("--env_reward_interval", type=int, default=5, help="environment reward compute interval (steps)")
@@ -199,10 +202,11 @@ def setup_signal_handlers(controller,dds_manager=None,image_server=None):
 
 
 
-def set_viewport_camera(camera_name: str) -> None:
+def set_viewport_camera(camera_name: str, robot_type: str = "g129") -> None:
     """Switch the active Isaac Sim viewport to a robot / world camera.
 
     ``camera_name`` shortcuts:
+      * ``robot`` / ``perspective_robot`` → G1 ``PerspectiveCamera_robot`` (trailing)
       * ``front_cam`` / ``head`` / ``fpv`` → G1 head D435
       * ``perspective`` / ``world`` → ``/World/PerspectiveCamera``
       * otherwise treated as a full USD camera prim path
@@ -211,7 +215,13 @@ def set_viewport_camera(camera_name: str) -> None:
     if not name or name.lower() in ("none", "off", "-"):
         return
 
+    g1_robot = "/World/envs/env_0/Robot/d435_link/PerspectiveCamera_robot"
+    h12_robot = "/World/envs/env_0/Robot/camera_link/PerspectiveCamera_robot"
+    trailing = h12_robot if str(robot_type).startswith("h1") else g1_robot
     shortcuts = {
+        "robot": trailing,
+        "perspective_robot": trailing,
+        "trailing": trailing,
         "front_cam": "/World/envs/env_0/Robot/d435_link/front_cam",
         "front_camera": "/World/envs/env_0/Robot/d435_link/front_cam",
         "head": "/World/envs/env_0/Robot/d435_link/front_cam",
@@ -231,7 +241,7 @@ def set_viewport_camera(camera_name: str) -> None:
             return
         viewport.set_active_camera(cam_path)
         print(f"[sim] viewport camera → {cam_path}")
-        print("[sim] tip: PerspectiveCamera → Cameras 可随时切回俯视 / 其它相机")
+        print("[sim] tip: Cameras 列表可切回 Perspective / 其它相机")
     except Exception as e:
         print(f"[sim] failed to set viewport camera '{cam_path}': {e}")
 
@@ -461,9 +471,12 @@ def main():
         args_cli.enable_wholebody_dds = True
         args_cli.enable_dex1_dds = True
 
-    # Optional viewport camera switch (default: none — keep editor Perspective).
+    # Default viewport: G1 trailing PerspectiveCamera_robot (not editor Perspective).
     if not getattr(args_cli, "headless", False):
-        set_viewport_camera(getattr(args_cli, "viewport_camera", "none"))
+        set_viewport_camera(
+            getattr(args_cli, "viewport_camera", "robot"),
+            robot_type=getattr(args_cli, "robot_type", "g129"),
+        )
     
     # create simplified control configuration
     try:    

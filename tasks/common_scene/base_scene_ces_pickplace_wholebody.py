@@ -10,7 +10,8 @@ Layout:
   XY centroid so the default viewport sees the robot from behind, looking at
   the machine front (same composition as the G1 trailing camera).
 * ``object`` wraps ``Root/LoadingLine/Tray_Assembly_01/Product`` (``spawn=None``).
-* Warehouse ``Structure/walls`` are hidden at startup.
+* Warehouse room walls stay visible (``Structure/walls``).
+* LoadingLine drawer is recolored at startup to match the CES shell gray.
 """
 import math
 import os
@@ -33,10 +34,10 @@ LOADING_LINE_BOTTOM_Z = 0.6173
 
 _TABLE_LOCAL_HEIGHT = 0.9941
 # LoadingLine 底面约 0.62 m；原始桌高 0.99 m 看着太高。
-# 桌面略抬，让 Place 松爪离筐底只剩一丝空隙（不要再拉回 scale_z=1）。
-TABLE_TOP_EXTRA_Z = 0.06
+# +7 cm 时 05→15 会剐托盘；再降 2.5 cm 到 +2.0 cm。不要拉回 scale_z=1。
+TABLE_TOP_EXTRA_Z = 0.020
 TABLE_TOP_Z = LOADING_LINE_BOTTOM_Z + TABLE_TOP_EXTRA_Z
-TABLE_SCALE_Z = TABLE_TOP_Z / _TABLE_LOCAL_HEIGHT  # ≈ 0.681
+TABLE_SCALE_Z = TABLE_TOP_Z / _TABLE_LOCAL_HEIGHT  # ≈ 0.641
 # Authored gray tote on the packing table (container_h20).  World height
 # follows the same Z scale as the table.
 _PLACE_TRAY_LOCAL_HEIGHT = 0.16
@@ -298,13 +299,22 @@ def place_gray_tray_on_table(env, env_ids=None):
 
 
 def _bind_physics_material(prim, shade_mat) -> int:
+    """Bind a PhysX material without replacing the CAD visual look.
+
+    A default (all-purpose) bind would override OmniPBR and render the
+    drawer white, which is what happened on Tray_Assembly_01.
+    """
     from pxr import Usd, UsdPhysics, UsdShade
 
     n = 0
     for p in Usd.PrimRange(prim):
         if p.HasAPI(UsdPhysics.CollisionAPI):
-            UsdShade.MaterialBindingAPI.Apply(p).Bind(
-                shade_mat, UsdShade.Tokens.strongerThanDescendants
+            api = UsdShade.MaterialBindingAPI.Apply(p)
+            api.UnbindDirectBinding()
+            api.Bind(
+                shade_mat,
+                bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+                materialPurpose="physics",
             )
             n += 1
     return n
@@ -386,8 +396,12 @@ def tune_product_grasp_physics(env, env_ids=None):
                 if "/Product" in str(p.GetPath()):
                     continue
                 if p.HasAPI(_Phys.CollisionAPI):
-                    UsdShade.MaterialBindingAPI.Apply(p).Bind(
-                        tray_mat, UsdShade.Tokens.strongerThanDescendants
+                    api = UsdShade.MaterialBindingAPI.Apply(p)
+                    api.UnbindDirectBinding()
+                    api.Bind(
+                        tray_mat,
+                        bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+                        materialPurpose="physics",
                     )
                     n_tray += 1
 
@@ -400,8 +414,12 @@ def tune_product_grasp_physics(env, env_ids=None):
                 if "right_hand" not in str(p.GetPath()).lower():
                     continue
                 if p.HasAPI(_Phys.CollisionAPI):
-                    UsdShade.MaterialBindingAPI.Apply(p).Bind(
-                        pad_mat, UsdShade.Tokens.strongerThanDescendants
+                    api = UsdShade.MaterialBindingAPI.Apply(p)
+                    api.UnbindDirectBinding()
+                    api.Bind(
+                        pad_mat,
+                        bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+                        materialPurpose="physics",
                     )
                     n_pad += 1
         print(
@@ -411,12 +429,101 @@ def tune_product_grasp_physics(env, env_ids=None):
         )
 
 
+# CAD default for the CES shell panels. LoadingLine authored a lighter
+# bluish-white (0.79, 0.82, 0.93); physics-only binds also made it white.
+_CES_SHELL_GRAY = (0.7529412, 0.7529412, 0.7529412)
+
+
+def _is_loading_line_product(path: str) -> bool:
+    return "/Product/" in path or path.endswith("/Product")
+
+
+def _bindable_prim(prim):
+    """Walk off instance proxies so material binds actually author."""
+    p = prim
+    while p.IsValid() and p.IsInstanceProxy():
+        p = p.GetParent()
+    return p
+
+
+def _define_shell_gray_visual_material(stage, path):
+    """OmniPBR + UsdPreviewSurface so RTX Real-Time and hydra both pick it up."""
+    from pxr import Gf, Sdf, UsdShade
+
+    gray = Gf.Vec3f(*_CES_SHELL_GRAY)
+    mat = UsdShade.Material.Define(stage, path)
+
+    preview = UsdShade.Shader.Define(stage, f"{path}/PreviewSurface")
+    preview.CreateIdAttr("UsdPreviewSurface")
+    preview.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(gray)
+    preview.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+    preview.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.5)
+    preview.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(1.0)
+    mat.CreateSurfaceOutput().ConnectToSource(preview.ConnectableAPI(), "surface")
+
+    mdl = UsdShade.Shader.Define(stage, f"{path}/MDLShader")
+    mdl.SetSourceAsset("OmniPBR.mdl", "mdl")
+    mdl.SetSourceAssetSubIdentifier("OmniPBR", "mdl")
+    mdl.CreateInput("diffuse_color_constant", Sdf.ValueTypeNames.Color3f).Set(gray)
+    mdl.CreateInput("reflection_roughness_constant", Sdf.ValueTypeNames.Float).Set(0.5)
+    mdl.CreateInput("metallic_constant", Sdf.ValueTypeNames.Float).Set(0.5)
+    mat.CreateSurfaceOutput("mdl").ConnectToSource(mdl.ConnectableAPI(), "out")
+    return mat
+
+
+def recolor_loading_line_drawer(env, env_ids=None):
+    """Paint LoadingLine drawer parts the same gray as the CES shell.
+
+    Skips ``Product`` so the pick part stays visually distinct. Binds a new
+    visual material on meshes (CAD shader edits are ignored by RTX when a
+    physics material was bound all-purpose).
+    """
+    del env_ids
+    try:
+        import omni.usd
+        from pxr import Usd, UsdGeom, UsdShade
+    except ImportError:
+        print("[ces_scene] omni.usd unavailable — cannot recolor drawer")
+        return
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return
+
+    n_bind = 0
+    for i in range(env.num_envs):
+        root = stage.GetPrimAtPath(f"/World/envs/env_{i}/CESMachine/Root/LoadingLine")
+        if not root.IsValid():
+            continue
+        vis_mat = _define_shell_gray_visual_material(
+            stage, f"/World/envs/env_{i}/CESDrawerShellMaterial"
+        )
+        for p in Usd.PrimRange(root):
+            if _is_loading_line_product(str(p.GetPath())):
+                continue
+            if not p.IsA(UsdGeom.Mesh):
+                continue
+            target = _bindable_prim(p)
+            if not target.IsValid() or _is_loading_line_product(str(target.GetPath())):
+                continue
+            api = UsdShade.MaterialBindingAPI.Apply(target)
+            api.Bind(
+                vis_mat,
+                bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+            )
+            n_bind += 1
+    if n_bind:
+        print(f"[ces_scene] LoadingLine drawer → CES shell gray meshes={n_bind}")
+    else:
+        print("[ces_scene] LoadingLine drawer recolor: no meshes bound")
+
+
 def ces_scene_startup(env, env_ids=None):
-    """Startup hook: hide walls, strip crates, seat the gray tote, tune grasp."""
-    hide_warehouse_walls(env, env_ids)
+    """Startup hook: strip crates, seat the gray tote, tune grasp, match drawer color."""
     cleanup_packing_table(env, env_ids)
     place_gray_tray_on_table(env, env_ids)
     tune_product_grasp_physics(env, env_ids)
+    recolor_loading_line_drawer(env, env_ids)
 
 
 @configclass

@@ -95,7 +95,7 @@ class RewardsCfg:
 
 @configclass
 class EventCfg:
-    """Startup: hide walls. Reset: restore robot + Product to authored poses."""
+    """Startup: seat tote and grasp physics. Reset: restore robot + Product."""
 
     ces_scene_startup = EventTerm(
         func=ces_scene_startup,
