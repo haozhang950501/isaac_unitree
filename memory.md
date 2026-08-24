@@ -1,8 +1,8 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-24（Pick 回收为 `40(live)→30→20→05`；Place 已集成人工 `05→15` 关节姿态，15 后锁实时 TCP X/Y，仅由 Unitree 插补与位置 IK 向下补偿 Z，不使用 pose 25。）
+更新时间：2026-08-24（pick/walk 夹持已稳住；walk 到站钉**实际骨盆完整四元数**，05→15 件不再掉。**下一步：人工重设计 05 与 15。** 见 §6.7、§11。）
 
-**下一阶段：阿里云 Isaac Sim 验收 Place。** 重点看 `05→15` 持物避碰、15 后纯 Z 下降是否进入灰筐且不碰沿、产品释放和最终 Z 余量；需要时只调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要重新加入世界 X/Y 目标。见 §11。
+**下一阶段：在 `urdf_pose_toolkit` 重新人工保存胸前 05 和放置终点 15**，替换当前 Smooth v1 过渡姿态后再验 05→15 避碰与落筐。夹持/定盘逻辑不要为了够着灰筐去改。见 §11。
 
 ## 1. 项目概况
 
@@ -24,8 +24,12 @@
 - 机器人 **spawn 就在抓取站**（`ROBOT_INIT_POS = PICK_STAND_XY`），启动不再瞬移。
 - 抬起后阶段 `RETURN_HOME`（枚举名保留）：Smooth v1 按独立回收清单 `40(live)→30→20→05_chest_carry` 收到胸前，夹爪保持闭合，到05后再 walk；旧 V1/V2 回退组仍保持逆序回00。
 - **Walk 换站已跑通**：「后退 → 边退边右转（转弧）→ 前进」，固定幅值 + 死区（§6.2）。Isaac Sim 实测后退、右转、走到放置站范围都 OK。
+- **pick→walk 禁止先往前凑步**（2026-08-24）：只发满幅 S 不够。松钉第一帧必须 `actor_obs_buffer.reset()` + 骨盆/产品后退 kick，否则策略会先朝 CES 走两步再后退。见 §6.6。
 - **Place 已改为人工 q + 最小 IK 交接**：05→15 用清单关节插补；15 后不追灰筐中心 X/Y，只保留实时 X/Y 并向下补偿 Z。pose 25 已取消，见 §11。
+- **walk→place 夹持已稳住**（2026-08-24 傍晚 Isaac Sim）：到站钉实际 XY/Z **加上走路残留的完整四元数**，手臂只 PD、夹爪锁 `0.019`、钉盆时不跑步态。旧的纯 yaw 钉盆会把夹爪甩开。见 §6.7。
 - Pick/Place/导航共 44 项 CPU 合约测试已过，导航仍含 900 组撞桌扫描（§6.2 末）。
+
+**当前 05 / 15 是过渡姿态**，几何上还不够用来正式落筐。下一步只改路点 JSON，不改定盘/夹爪。
 
 **2026-08-15 Pick 优化完成**：默认 `ces_pick_natural_v2`。00→05→10→20→25→30 关节插补；30 后锁 XY、只落 Z；40 只作 `q_ref`。05/10 改为胸口前伸（避开抽屉）。抬起一次 IK 后关节回放，夹持中不每帧 DiffIK。放置实验（收肘/反放 40→10）已全部撤销。
 
@@ -34,6 +38,8 @@
 **2026-08-22～23 回收历史**：第一版胸前 05 为 `[-0.7999999,-0.24,0.59999996,0.09000012,0.36,-0.13,0.72999984]`；回收曾走 `40→30→20→10→05`，随后去掉中间 20/10 改成 `40(live)→30→05`。阿里云实测证明直达路径会让夹持产品刮抽屉边缘，因此该直达方案已被 2026-08-24 版本替代。
 
 **2026-08-24 回收 V2**：用户在 `urdf_pose_toolkit/poses/ces_return_to_chest_v2/` 重新人工保存 05，q=`[-0.75999993,-0.26,+0.58,-0.68999976,-0.34,-0.05000001,+0.08999996]`，URDF 关节限位最小余量 `0.3572 rad`。正式路径为 `40(live)→30→20→05`：40 使用抬起后实时 q，不硬下发 authored q_ref；`40(live)→30` 单独用 smoothstep 前导段，避免未知 live q 改变后续曲线；到 30 后再按 URDF-viz 确认的单调三次 Hermite `30→20→05` 退出抽屉并收到新的贴胸姿态。原始时长 `0.8/1.2/3.0 s`，默认 1.5× 后约 `0.53/0.80/2.00 s`。URDF-viz 已确认，Pick/Walk 共 42 项 CPU 合约测试通过；新的夹持避碰和 walk 平衡仍需在 Isaac Sim 复验。
+
+**2026-08-24 pick→walk 先往前两步**：阿里云复测，发了满幅 `vx=-0.45` 仍先朝 CES 走两步再后退。不是没发 S，也不是该再等站稳。根因是 10 帧观测栈在 pick 阶段全是 `vx=0`，策略把松钉当成站立起步。修法见 §6.6，**不要回退成等站稳**。
 
 **2026-08-21 Pick 提速**：动作没问题但太慢，加 `--ces_pick_speed` 时间缩放，默认 **1.5×**。只除 `UNFOLD(00→30)` / `LIFT` / `RETURN_HOME` 三段关节轨迹的**时长**，路点 q 和曲线形状一字不动（均匀时间缩放 = 同一条曲线、速度整体 ×1.5）。`DESCEND` / `GRASP` 故意不缩放。pick 段 18.4 s → 14.0 s（−24%）。详见 §10.5。
 
@@ -148,8 +154,10 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 开关开：SETTLE → GOTO_PICK → UNFOLD(00→30 关节) → DESCEND(锁XY、slerp朝向、落Z、q_ref 30→40) → GRASP
 开关关：SETTLE → GOTO_PICK → UNFOLD → APPROACH → DESCEND → GRASP
 之后相同：LIFT(Z+8 cm，世界 Y−6 cm) → RETURN_HOME(40 live→30→20→05胸前) → CARRY/HOLD
-        → GOTO_PLACE(walk 三段：后退→转弧→前进，到线停死，保持05) → PLACE_APPROACH(关节05→15)
-        → PLACE_DESCEND(锁实时XY、Unitree IK只落Z) → RELEASE → RETRACT(15→05)
+        → GOTO_PLACE(walk 三段：后退→转弧→前进，到线停死，保持05)
+        → PLACE_HOLD(钉实际骨盆 live quat，冻05，夹爪不动，约 1.5 s)
+        → PLACE_APPROACH(关节05→15) → PLACE_DESCEND(锁实时XY、Unitree IK只落Z)
+        → RELEASE → RETRACT(15→05)
 ```
 
 - 伸手：DiffIK + 分段插补；伸手阶段钉盆 + 右臂 `write_joint_state`（否则默认垂臂把臂拉回去）。
@@ -182,6 +190,11 @@ python tools/probe_ces_workspace.py --device cuda:0 --quick
 | `stop_margin` 小于滑行量 | 必然冲过目标。`vx` 不能降到死区以下 → 没有缓刹，只能提前松手。余量按日志 `coast = margin - along` 反推，别猜 |
 | 只测标称工况就以为安全 | 撞桌是"歪起步 + 跟踪失配 + 指令滞后"叠加出来的。必须做组合扫描（见 `test_no_approach_ever_reaches_the_table`），单点全过但 42/900 会撞 |
 | 最关键的"停"只写在规划里 | 三次撞桌有两次是规划分支漏了停止条件。要另加一条只看位姿的硬性禁入闩锁兜底 |
+| **pick 完满幅 S 仍先往前走两步再后退** | 指令已经是 `-vx`，错在观测栈：pick 钉盆时每帧 `compute_observations([0,0,0,0.8])`，10 帧历史全是站立。松钉后策略先按站立起步朝 CES 收两步，等栈里换上后退命令才真退。**再等站稳会更差**（那是 08-23 已经修掉的前倾）。必须 `reset` 观测/动作栈 + 骨盆与产品写后退世界速度。见 §6.6 |
+| **walk 到站后钉盆，件飞掉、空爪合死** | `_apply_snap` 把骨盆写成**纯 yaw**，走路残留俯仰被瞬间掰平，夹爪甩一下把摩擦抓打断。要钉**到位时的完整四元数**，手臂只 PD、夹爪目标不变。见 §6.7 |
+| **到站不定盆、冻腿做 05→15** | 人后仰，件仍掉 |
+| **到站不定盆、05→15 还跑站立策略** | 钉盆+策略会爆炸；不定盆+策略伸手会整机飞起 |
+| **夹持时每帧用 live 腰覆盖行走策略** | walk 上身越走越歪、件中途掉。走路腰必须仍是默认指令，只在到站钉盆后才冻腿 |
 
 ### 3.3 关键路径
 
@@ -323,6 +336,7 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 - **转弧带的是后退不是前进**：后退是唯一实测能迈步的模式；而且弧终点被推到 `y=-1.705`，第③段留 0.93 m 行程，`stop_margin` 才有作用空间。若改成前进转弧，转完只剩 0.18 m 到桌前，而桌沿余量只有 0.12 m，一过冲就撞桌。
 - 转弧全程 x 单调增大，是**远离** CES 的方向；最靠近 CES 的时刻就是弧起点 `x=-2.642`（比抓取站还外 0.55 m）。
 - `WALK_BACKOFF_TRIM` 已归零：它和 `WALK_TURN_LEAD` 同轴同向，"宁可退不够"的作用由 lead 承担，两个一起留会退得太少、贴着 CES 转弧。
+- **pick→walk 起步**：CARRY 立刻满幅 S（`prime_walk_filt`），并且必须 `_begin_walk_policy` 清空 10 帧站立观测 + 后退 kick。只发满幅 S 仍会先往前走两步，见 §6.6。
 - **后退 → 转弧 → 前进全程不停**：`settle_before=0.0` 同时给 turn 和 approach。先 settle 成静止再起下一步，策略抬不起步（转不动 / 转完不往 +Y 走）。右转结束后直接发机体系 `+vx`（W）；转正后面朝桌子时这就是世界 +Y。下发滤波在 `vx` 变号时跳变，不从 −0.45 ramp 过 0（过 0 会再次停步）。
 - 漂移保护：转弧走了 `WALK_TURN_MAX_DRIFT=0.70 m` 还没转到位，说明策略没吃下 `wz`，此时把幅值提到 `WALK_WZ_MAX=1.55` 并**把弧反向**（mode 记作 `turn_pinned`，日志打醒目告警），边把漂移走回去边继续试。**注意这里不能砍掉 `vx`**：`vx` 是唯一能触发步态的轴，归零只会原地冻住、白等 60 s 超时。
 - `WALK_YAW_ARRIVE=0.40` 是**转向的 stop_margin**（0.15 → 0.25 → 0.40）：实测在 0.25 处松手后还会多转约 14°，即余转合计约 28°，所以提前到约 23° 松手。落点 `head=70°`（目标 90°）就是松手太晚的证据。
@@ -346,7 +360,7 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 - 到站稳定 `WALK_ARRIVE_HOLD=0.35 s` 后锁实际骨盆位姿，日志打 `dxy/dyaw` + **分解到行走轴的 `along`（+=停短）和侧向 `side`（−=偏左）** + `coast` + `arm_reach`。旧故障会打成 `along=-150mm side=-300mm`。
 - 走路到站后锁实际骨盆位姿；Place 不做世界 X/Y 补偿，人工 15 决定手臂横向位置，最终 IK 只改 Z。旧记录里的 `PLACE_HOLD_XY_M_WALK` 常量代码里并不存在。
 
-纯 CPU 测试：`python -m unittest tools.test_ces_walk_navigation`（26 项）。死区模型是"|vx|<0.30 / |vy|<0.25 / |wz|<0.40 不动"，外加最关键的一条：**`vx` 低于死区时整条指令作废**（`vy`/`wz` 再大也不动），用来复现两次真实故障 —— 原地纯偏航转不动、放置站前纯侧移冻住 18 s。
+纯 CPU 测试：`python -m unittest tools.test_ces_walk_navigation`（27 项）。死区模型是"|vx|<0.30 / |vy|<0.25 / |wz|<0.40 不动"，外加最关键的一条：**`vx` 低于死区时整条指令作废**（`vy`/`wz` 再大也不动），用来复现两次真实故障 —— 原地纯偏航转不动、放置站前纯侧移冻住 18 s。`test_body_reverse_at_pick_yaw_is_world_plus_x` 守住 pick 朝向 π 时 S 必须是世界 +X。
 
 **`test_no_approach_ever_reaches_the_table` 是这里最重要的一个用例**：900 组组合扫描（进站距离 × 侧偏 × 朝向差 × 偏航增益 × 侧移增益 × 指令滞后），断言骨盆**任何时刻**都不许到达桌沿。教训是**单点工况测不出撞桌**：前两次我都只测了标称路线加一两个位姿，全过；一上组合扫描立刻暴露 42/900 撞桌。杀死机器人的是"歪着起步 + 跟踪失配 + 指令滞后"三者叠加，必须一起扫。
 
@@ -355,7 +369,7 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 - `yaw_gain` 0.7–1.5、`lat_gain` 0.7–1.0、滞后 0.25–0.45 s 全覆盖。
 - 停短范围 0~30 cm，宽度几乎全来自**滑行量未知**（滞后 0.25 vs 0.45）。实机滑行是个固定值，跑一次按日志的 `coast` 就能把这个带压窄。
 
-### 6.3 Walk 的四次实测故障（按时间顺序，每一次都推翻了上一次的假设）
+### 6.3 Walk 的五次实测故障（按时间顺序，每一次都推翻了上一次的假设）
 
 全身 RL 策略按**默认垂臂站姿**训练，夹持后右臂前伸是 OOD，所以只能靠实测逼近：
 
@@ -363,8 +377,9 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 2. **原地纯 `wz` 不转**：后退到位后 settle 0.5 s 再发 `(0,0,-0.70)`，人停住仍朝柜子。三因叠加：① 0.70 只有键盘上限 1.57 的 45%；② `vx=vy=0` 时策略退化成静止站立；③ 转向前还先 settle 成静止。改法：`wz=1.20` + 转向骑在后退指令上画弧 + 取消转向前的 settle。
 3. **纯侧移也不迈步**：为了"先侧移上线"把 `vx` 归零，发出 `(0,+0.30,0)`，机器人在放置站前站了 18 s 一动不动。**这一条才定死了"只有 `vx` 能触发步态"**（§6.1）。
 4. **为了摆正姿态一路开进桌子并摔倒**：上一条的直接后果 —— 既然纠偏必须带 `vx`，"姿态没到位就不算到站"就等于"没摆正就一直往前开"；再加上 `stop_margin(0.20) < 滑行量(0.25)`，必然冲过站点。改法：停止线闩锁 + 硬性禁入兜底（§6.2）。
+5. **满幅 S 仍先往前走两步再后退**（2026-08-24）：08-23 只修了指令滤波，没修 10 帧 `vx=0` 观测栈。策略把松钉当成站立起步，先朝 CES 收两步。详见 §6.6。
 
-其他仍然成立的约束：钉盆 + 策略蹬腿会物理爆炸；`vx=0` 松钉让策略"接腿"是已知摔倒模式；观测欺骗（假垂臂 / 假重力）会自相矛盾；不要滑移、不要假迈步 overlay。键盘 `S` 能退是因为手臂垂着、指令有斜坡、策略一直控腿。
+其他仍然成立的约束：钉盆 + 策略蹬腿会物理爆炸；`vx=0` 松钉让策略"接腿"是已知摔倒模式；观测欺骗（假垂臂 / 假重力）会自相矛盾；不要滑移、不要假迈步 overlay。键盘 `S` 能退是因为手臂垂着、指令有斜坡、策略一直控腿。**不要用假垂臂观测来消 pick→walk 的前两步。**
 
 ### 6.4 Walk 验收清单
 
@@ -378,8 +393,11 @@ CARRY 0.6  HOLD 0.3  PLACE_APPROACH(05→15) 3.2/速度倍率  PLACE_DESCEND(Z-o
 - [x] spawn 直接在抓取站，不再瞬移
 - [x] 夹爪全程 PD 闭合，产品靠摩擦跟着走，不焊 TCP
 - [x] 2026-08-23 walk优化：转弧→前进不停、直接发 W；pick 完立刻满幅 S，不等站稳；walk→place 夹爪目标锁死、到站钉实际骨盆 Z；托盘 −X 15 cm、站位不动
+- [x] 2026-08-24 pick→walk 直接后退：清空 10 帧站立观测 + 骨盆/产品后退 kick（§6.6）。**满幅 S 单独不够。**
+- [x] 2026-08-24 walk→place 夹持：到站钉 live quat，手臂 PD、夹爪锁死、钉盆不跑步态（§6.7）。Isaac Sim 确认件不再掉。
 - [ ] 按日志 `coast` 把 `WALK_STOP_MARGIN_PLACE` 从 0.30 收到 `coast + 0.05`，压掉最坏情况 75 cm 的前伸
 - [ ] 到站 `dxy` 落在 ~10 cm 内、`along>0`、`on_target` 不报 off-target
+- [ ] **人工重设计 05 胸前姿态和 15 放置终点**（当前 JSON 只是过渡，见 §11）
 
 ### 6.5 HOLD 快照（给 walk 到 place 的双足控制）
 
@@ -406,6 +424,106 @@ HOLD 在 **pick 站**冻臂，尚未 snap。走路换站应保持这套右臂 q 
 下次跑通 HOLD 时看日志：`[ces_fsm] HOLD tcp_w=... tcp_b=... q=[...]`，用新数替换上表。
 
 参考（垂臂、不钉盆）任务：`Isaac-Move-Cylinder-G129-Dex1-Wholebody`。
+
+### 6.6 pick→walk 必须直接后退，禁止先往前凑步（2026-08-24，非常重要）
+
+用户要求：pick 一结束就直接后退离开 CES，**不要先往前走两步**。
+
+#### 两次修法，不要搞混
+
+| 日期 | 现象 | 当时以为的原因 | 真正有效的修法 | 不够的修法 |
+|---|---|---|---|---|
+| 2026-08-23 | 抱件往前栽进 CES | 等站稳再松钉、指令从 0 ramp | `prime_walk_filt`：CARRY 立刻切 GOTO_PLACE，第一帧满幅 `vx=-0.45`，不等 `CARRY_TIME` / `is_standing` | 再加站稳等待（会更差） |
+| 2026-08-24 | **已经满幅 S，仍先往前走两步再后退** | 以为 08-23 的修法被改回去了，或该再等站稳 | **清空观测栈 + 后退速度 kick**（下面） | 只发满幅 S；等站稳；加大 `WALK_VX`；假垂臂观测 |
+
+08-23 修的是**指令通道**（滤波从 0 ramp / 过 0 停步）。08-24 修的是**策略看到的历史**。两条要同时在，缺一不可。
+
+#### 根因
+
+全身策略输入是 **10 帧堆叠观测**（`CircularBuffer max_len=10`，`dt=0.02` → 0.2 s）。内容含 `command=[vx,vy,wz,height]`。
+
+pick 全程钉盆、`policy_active=False`，每帧仍调用 `compute_observations([0,0,0,0.8])`。所以松钉前 10 帧全是「站立、无行走命令」。
+
+CARRY 虽然第一帧就把 `cmd` 设成 `[-0.45,0,0,0.8]` 并 `run_policy`，但栈里仍是 9 帧零命令 + 1 帧后退。策略把它当成**从站立起步**：先朝面对方向（CES，世界 −X）收 1～2 步，等历史换成后退命令才真退。这两步看起来像「先往前走再后退」，指令日志却一直是 `cmd_b=(-0.45,0,0)` —— 所以会误判成没发 S。
+
+新 05 贴胸、产品更居中，松钉后质心更容易正前方栽，把这个「收集步」放大了。旧 05 偏右时没这么显眼，所以 08-23 会以为满幅 S 已经够。
+
+DelayBuffer 默认 `time_lag=0`，**不是**动作延迟导致的。不要往动作 delay 上查。
+
+#### 禁止再走的路
+
+- **不要等站稳再发 S**。钉盆时 `is_standing()` 第一帧就真；等完再松钉 + 从 0 ramp = 08-23 已经修掉的前倾栽 CES。
+- **不要钉盆同时跑策略**（钉盆 + 策略蹬腿会物理爆炸）。
+- **不要伪造垂臂 / 重力观测**来骗策略后退（自相矛盾）。
+- **不要因为「已经满幅 S 了」就以为起步没问题**。看的是观测栈，不是当前 `cmd`。
+
+#### 正确修法（已写入代码）
+
+松钉、第一次 `policy_active` 时调用 `_begin_walk_policy`（`action_provider_ces_grasp.py`）：
+
+1. `actor_obs_buffer.reset()`：丢掉 pick 阶段 10 帧 `vx=0`。随后 `run_policy` 的第一次 `append` 会把整栈填成当前姿态 + 后退命令，策略从第一帧就看见「一直在下后退令」。
+2. `action_buffer.reset()` 再 `compute(zeros)`：last_action 也从站立零动作起，不要带着 pick 阶段塞进去的腿目标。
+3. `_kick_walk_start_velocity(vx_body)`：按当前 heading 把机体系 `vx` 写成世界速度，`write_root_velocity_to_sim` 给骨盆；若正在夹持，产品写**同一**世界速度，避免件被瞬间甩脱。pick yaw=π、`vx_b=-0.45` → 世界 `(+0.45, 0)`，即离开 CES 的 +X。
+
+触发点：`prime_walk_filt` 被消费的那一帧（CARRY→GOTO_PLACE，`guide=True`）。之后滤波仍拉满，不从 0 ramp。
+
+#### 日志（关仿真重开后必须看到）
+
+```text
+[ces_fsm] pick done — S backoff now (flush stand obs, kick reverse)
+[CESGrasp] walk start kick vx_b=-0.45 world=(+0.45,-0.00) (no forward collect)
+```
+
+验收：pick 结束骨盆应立刻往世界 +X 走，不应先靠近 CES。若 kick 行的 `world.x` 为负，说明 heading 不是 π 或符号写反，先查 yaw，不要改路点 q。
+
+#### 代码位置
+
+```text
+action_provider/action_provider_ces_grasp.py   # _begin_walk_policy, _kick_walk_start_velocity
+action_provider/ces_grasp/state_machine.py     # CARRY 立刻 prime + GOTO_PLACE
+tools/test_ces_walk_navigation.py              # test_body_reverse_at_pick_yaw_is_world_plus_x
+```
+
+### 6.7 walk→place：钉盆但不要拧夹爪（2026-08-24 傍晚，Isaac Sim 已确认件不掉）
+
+Pick 和 walk 全程摩擦夹持是稳的。件在**到站切 place** 时飞掉，空爪再被 PD 收到 `0.019`。
+
+#### 根因（按实测顺序，不要回退）
+
+| 试法 | 结果 | 原因 |
+|---|---|---|
+| 到站立刻 `_apply_snap`（纯 yaw + 可选 `STAND_PELVIS_Z`） | 件飞 / 夹爆 | 走路残留俯仰被写成 yaw-only，夹爪甩一下，接触断 |
+| 到站后改持物 kp=400、锁 live 夹爪 q | **pick 夹不起来** | 抬起前闭合力不够。已全部改回 `0.019` + `kp=1800` |
+| 到站不定盆、冻最后一帧腿做 05→15 | 人后仰，件仍掉 | 伸手改质心，冻腿顶不住 |
+| 到站不定盆、05→15 还跑 `vx=0` 策略 | 整机飞起 | 与「钉盆+策略爆炸」同类；不定盆伸手策略也 OOD |
+| 夹持时每帧把 live 腰写进 `full_action` | **walk 上身歪、件中途掉** | 覆盖了行走策略的腰。走路必须仍用 `default_waist` |
+
+#### 正确修法（已写入，Isaac Sim 确认）
+
+到站（`WALK_ARRIVE_HOLD` 之后）：
+
+1. 锁**实际**骨盆 `xy / z / 完整四元数`（`snap_quat`），**不要** `yaw_quat(heading)`。
+2. `PLACE_HOLD` 约 `WALK_PLACE_HOLD_TIME=1.5 s`：右臂冻在当时 live q（贴近 05），夹爪仍锁 `GRIPPER_CLOSED=0.019`，`kp=1800`。
+3. 钉盆时 **guide=False**，不跑步态；腿用走路最后一帧 `_last_policy_legs`，腰仍是默认值。
+4. 夹持中手臂只 PD，禁止 `write_joint_state` 手臂/夹爪。
+5. 然后 05→15，骨盆一直钉着同一 live quat。
+
+日志应看到：`pin live pelvis quat, arm PD, gripper locked, no gait`。
+
+#### 禁止再走的路
+
+- 不要为了「place 时人别倒」就在钉盆期间开策略。
+- 不要为了「别夹爆」就在抓取阶段降 kp / 锁 live 夹爪 q。
+- 不要在 walk 期间用 live 腰覆盖策略。
+- 不要把产品焊到 TCP。
+
+#### 代码位置
+
+```text
+action_provider/ces_grasp/state_machine.py     # PLACE_HOLD, _place_lock_quat, _place_body_cmd
+action_provider/action_provider_ces_grasp.py   # _apply_snap(..., quat=), 钉盆不改夹爪/手臂运动学锁
+action_provider/ces_grasp/constants.py         # WALK_PLACE_HOLD_TIME
+```
 
 ---
 
@@ -587,9 +705,9 @@ AABB Y 比 `PRODUCT_POS` 偏 −11 mm。夹爪闭合、站稳、抬臂完成；l
 
 ## 11. Place：人工 05→15 + Unitree 纯 Z 补偿（2026-08-24）
 
-### 11.1 已确认的关节路径
+### 11.1 当前过渡关节路径（下一步要重做）
 
-Place 只保留两个人工关节姿态，不使用 25：
+Place 只保留两个人工关节姿态，不使用 25。**2026-08-24 傍晚 Isaac Sim 已确认：用这组 q，walk 到站钉 live quat 后 05→15 件不再掉。** 但姿态几何仍不够用来正式对准灰筐，用户下一步会重新人工设计 05 和 15。
 
 ```text
 05_chest_carry = (-0.75999993, -0.26, +0.58, -0.68999976, -0.34, -0.05000001, +0.08999996)
@@ -599,6 +717,13 @@ Place 只保留两个人工关节姿态，不使用 25：
 15 源自 `urdf_pose_toolkit/poses/ces_place_from_05_v1/15_forward_extend_draft.json` 的用户人工保存值，URDF 最小关节限位余量 `0.5351 rad`。正式文件为 `action_provider/ces_grasp/poses/ces_pick_smooth_v1/15_place_forward_release.json`。
 
 `trajectory_manifest.json::place_path` 定义 `05→15`，原始时长 `3.2 s`、`segment_smoothstep` 起止停稳；默认 1.5× 后约 `2.13 s`。snap 换站不再先走旧 `PLACE_PRE_RAISE_Q`，而是保持胸前 05 到放置站后再执行 05→15。
+
+**重做 05 / 15 时：**
+
+- 在 `urdf_pose_toolkit` 按当前 walk 到站朝向（约 yaw=π/2、面向桌子）保存新 q。
+- 替换 `ces_pick_smooth_v1/05_chest_carry.json` 与 `15_place_forward_release.json`，并核对 manifest 的 `place_path` / `return` 终点名称。
+- **不要**为了够着灰筐去改钉盆、夹爪 kp、或重新加入世界 X/Y IK。夹持通道已经稳住。
+- 05 仍是 walk 全程持物姿态，也是回收终点；改 05 等于同时改 walk 平衡，需在 Isaac Sim 再验后退/转弧。
 
 ### 11.2 15 后的纯 Z IK 交接
 
@@ -619,6 +744,8 @@ PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.020
 
 ### 11.3 验证边界
 
-44 项 CPU 合约测试通过，覆盖清单加载、05/15 q、05→15 smoothstep、纯 Z 目标保持 X/Y且绝不抬升，以及既有 Pick/Return/Walk 合约。Python 编译和 JSON 解析通过。
+44 项 CPU 合约测试通过，覆盖清单加载、05/15 q、05→15 smoothstep、纯 Z 目标保持 X/Y且绝不抬升，以及既有 Pick/Return/Walk 合约。Walk 导航 27 项（含 pick yaw=π 时 S 必须是世界 +X）。
 
-尚未在本机完成 Isaac 物理验收。阿里云复测必须观察：05→15 持物扫掠是否碰胸/桌沿、15 实际 TCP 世界坐标、Z 下降量、产品底面是否碰筐沿、松爪后是否落入灰筐，以及回撤 `release→15→05` 是否安全。
+**Isaac Sim（2026-08-24 傍晚）**：pick → walk（直接后退，不再先往 CES 凑步）→ 到站钉 live quat → PLACE_HOLD → 05→15，产品不再脱落。Walk 期间腰必须保持默认指令，否则上身会歪。
+
+尚未验收：新 05/15 的灰筐对准、Z 下降是否进筐且不碰沿、松爪落点。重做路点后再调 `PLACE_FINAL_TCP_ABOVE_TRAY`，不要用 URDF 代理值冒充真 TCP，也不要加回世界 X/Y 目标。

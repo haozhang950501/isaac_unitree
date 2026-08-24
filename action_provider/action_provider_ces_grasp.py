@@ -83,6 +83,9 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._hold_yaw: float | None = None
         self._hold_z: float | None = None
         self._grip_cmd: float | None = None
+        self._grip_logged = False
+        self._last_policy_legs = None
+        self._product_brake_pending = False
         self._q_right = self._right_arm_default[0].clone()
         self._squeeze = False
         self._err_logged = False
@@ -106,6 +109,9 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._hold_yaw = None
         self._hold_z = None
         self._walk_prime = None
+        self._last_policy_legs = None
+        self._grip_logged = False
+        self._product_brake_pending = False
         self.reset_walk_filt()
         self._err_logged = False
         self._err_t = -10.0
@@ -121,6 +127,49 @@ class CESGraspActionProvider(DDSRLActionProvider):
         pick 结束后立刻满幅 S（-vx），避免等站稳再发时抱件前倾撞上 CES。
         """
         self._walk_prime = [float(cmd[0]), float(cmd[1]), float(cmd[2]), float(cmd[3])]
+
+    def _begin_walk_policy(self, cmd: list[float]):
+        """Clear standing-obs history and kick the root backward.
+
+        Actor obs is a 10-frame stack. Pick fills it with vx=0, so the first
+        gait inference still looks like standing and the policy takes one or
+        two collecting steps toward CES before reverse shows up in the stack.
+        Resetting makes every stacked frame a reverse command. The velocity
+        kick stops the carry COM falling forward on the first unpinned step.
+        """
+        self.actor_obs_buffer.reset()
+        self.action_buffer.reset()
+        zeros = torch.zeros(
+            self.num_envs,
+            self.num_actions_all,
+            dtype=torch.float,
+            device=self.env.device,
+        )
+        self.action_buffer.compute(zeros)
+        self._kick_walk_start_velocity(cmd[0])
+
+    def _kick_walk_start_velocity(self, vx_body: float):
+        """Give pelvis (and held product) the reverse world velocity immediately."""
+        robot = self.env.scene["robot"]
+        yaw = self.get_heading()
+        fwd, _left = C.forward_left(yaw)
+        vx_w = float(vx_body) * fwd[0]
+        vy_w = float(vx_body) * fwd[1]
+        dtype = robot.data.root_pos_w.dtype
+        vel = torch.zeros(1, 6, device=self.env.device, dtype=dtype)
+        vel[0, 0] = vx_w
+        vel[0, 1] = vy_w
+        robot.write_root_velocity_to_sim(vel)
+        if self._squeeze:
+            obj = self.env.scene["object"]
+            ov = torch.zeros(1, 6, device=self.env.device, dtype=obj.data.root_pos_w.dtype)
+            ov[0, 0] = vx_w
+            ov[0, 1] = vy_w
+            obj.write_root_velocity_to_sim(ov)
+        print(
+            f"[CESGrasp] walk start kick vx_b={vx_body:+.2f} "
+            f"world=({vx_w:+.2f},{vy_w:+.2f}) (no forward collect)"
+        )
 
     def _filter_walk_command(self, target) -> list[float]:
         """Rate-limit gait commands so HOLD does not hand the policy a step input."""
@@ -150,6 +199,18 @@ class CESGraspActionProvider(DDSRLActionProvider):
         robot = self.env.scene["robot"]
         return robot.data.joint_pos[:, self._right_arm_idx].clone()
 
+    def get_right_gripper_q(self):
+        robot = self.env.scene["robot"]
+        return robot.data.joint_pos[0, self._right_grip_idx].detach().clone()
+
+    def get_root_xy_speed(self) -> float:
+        lin = self.env.scene["robot"].data.root_lin_vel_w[0]
+        return float(torch.sqrt(lin[0] * lin[0] + lin[1] * lin[1]).item())
+
+    def get_object_xy_speed(self) -> float:
+        lin = self.env.scene["object"].data.root_lin_vel_w[0]
+        return float(torch.sqrt(lin[0] * lin[0] + lin[1] * lin[1]).item())
+
     def get_right_arm_home_q(self):
         """USD 默认右臂姿态（任务启动时的初始臂姿）。"""
         return self._right_arm_default.clone()
@@ -157,7 +218,9 @@ class CESGraspActionProvider(DDSRLActionProvider):
     def _slew_arm(self, q_tgt: torch.Tensor) -> torch.Tensor:
         # 夹持冻臂时慢跟；抬起走规划关节轨迹，不能限太死。
         phase = self.fsm.phase.value
-        slow = self._squeeze and phase in ("carry", "hold", "goto_place")
+        slow = self._squeeze and phase in (
+            "carry", "hold", "goto_place", "place_hold"
+        )
         lim = C.ARM_SLEW_RAD_LIFT if slow else C.ARM_SLEW_RAD
         dq = q_tgt - self._q_right
         dq = torch.clamp(dq, -lim, lim)
@@ -212,7 +275,13 @@ class CESGraspActionProvider(DDSRLActionProvider):
             and 0.68 < z < 0.88
         )
 
-    def _apply_snap(self, xy: tuple[float, float], yaw: float, z: float | None = None):
+    def _apply_snap(
+        self,
+        xy: tuple[float, float],
+        yaw: float,
+        z: float | None = None,
+        quat: tuple[float, float, float, float] | None = None,
+    ):
         robot = self.env.scene["robot"]
         pose = robot.data.root_state_w[:, 0:7].clone()
         old_x = float(pose[0, 0])
@@ -224,15 +293,41 @@ class CESGraspActionProvider(DDSRLActionProvider):
         pose[0, 0] = xy[0]
         pose[0, 1] = xy[1]
         pose[0, 2] = float(z) if z is not None else C.STAND_PELVIS_Z
-        qw, qx, qy, qz = C.yaw_quat(yaw)
-        pose[0, 3], pose[0, 4], pose[0, 5], pose[0, 6] = qw, qx, qy, qz
+        if quat is not None:
+            pose[0, 3] = quat[0]
+            pose[0, 4] = quat[1]
+            pose[0, 5] = quat[2]
+            pose[0, 6] = quat[3]
+        else:
+            qw, qx, qy, qz = C.yaw_quat(yaw)
+            pose[0, 3], pose[0, 4], pose[0, 5], pose[0, 6] = qw, qx, qy, qz
         vel = torch.zeros(1, 6, device=self.env.device, dtype=pose.dtype)
         robot.write_root_pose_to_sim(pose)
         robot.write_root_velocity_to_sim(vel)
         # 换站瞬移才带件；同站钉盆不焊 TCP，抬起靠摩擦。
+        # 钉盆清零骨盆速度时，产品若还带着 walk 速度，垫面会把件夹飞。
         jumped = (dx * dx + dy * dy) > 4e-4 or abs(dyaw) > 0.02
+        if quat is not None:
+            # Live-quat pin: do not yaw-rotate the product around the pelvis.
+            jumped = (dx * dx + dy * dy) > 4e-4
         if self._squeeze and jumped:
             self._translate_object_with_snap(old_x, old_y, dx, dy, dyaw)
+            self._product_brake_pending = False
+        elif self._squeeze and self._product_brake_pending:
+            self._stop_held_product()
+            self._product_brake_pending = False
+
+    def _soft_stop_roots(self):
+        """Zero pelvis and product velocity without writing poses.
+
+        ``write_root_pose`` after walking slams leftover pitch/roll to a
+        yaw-only quat and resets pad contacts, which ejects the part.
+        """
+        robot = self.env.scene["robot"]
+        vel = torch.zeros(1, 6, device=self.env.device, dtype=robot.data.root_pos_w.dtype)
+        robot.write_root_velocity_to_sim(vel)
+        if self._squeeze:
+            self._stop_held_product()
 
     def _translate_object_with_snap(
         self, old_x: float, old_y: float, dx: float, dy: float, dyaw: float
@@ -250,6 +345,12 @@ class CESGraspActionProvider(DDSRLActionProvider):
         op[:, 3:7] = quat_mul(dq, op[:, 3:7])
         vel = torch.zeros(1, 6, device=self.env.device, dtype=op.dtype)
         obj.write_root_pose_to_sim(op)
+        obj.write_root_velocity_to_sim(vel)
+
+    def _stop_held_product(self):
+        """Match product velocity to the snapped pelvis (zeros). Pads stay put."""
+        obj = self.env.scene["object"]
+        vel = torch.zeros(1, 6, device=self.env.device, dtype=obj.data.root_pos_w.dtype)
         obj.write_root_velocity_to_sim(vel)
 
     def _write_locked_upper_body(self, full_action: torch.Tensor):
@@ -278,12 +379,19 @@ class CESGraspActionProvider(DDSRLActionProvider):
             if not cmd.guide and cmd.snap_xy is not None and cmd.snap_yaw is not None:
                 self._hold_xy, self._hold_yaw = cmd.snap_xy, cmd.snap_yaw
                 self._hold_z = cmd.snap_z
+            pin_quat = None
             if policy_active:
                 pin_xy, pin_yaw, pin_z = None, None, None
+                self._product_brake_pending = True
+            elif cmd.snap_xy is not None and cmd.snap_yaw is not None:
+                pin_xy = cmd.snap_xy
+                pin_yaw = cmd.snap_yaw
+                pin_z = cmd.snap_z
+                pin_quat = cmd.snap_quat
             else:
-                pin_xy = cmd.snap_xy if cmd.snap_xy is not None else self._hold_xy
-                pin_yaw = cmd.snap_yaw if cmd.snap_yaw is not None else self._hold_yaw
-                pin_z = cmd.snap_z if cmd.snap_z is not None else self._hold_z
+                pin_xy = self._hold_xy
+                pin_yaw = self._hold_yaw
+                pin_z = self._hold_z
                 if pin_xy is None:
                     pin_xy, pin_yaw, pin_z = C.SPAWN_STAND_XY, C.SPAWN_STAND_YAW, None
 
@@ -293,6 +401,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
                 if self._walk_prime is not None:
                     self._walk_cmd = list(self._walk_prime)
                     self._walk_prime = None
+                    self._begin_walk_policy(self._walk_cmd)
                 elif (
                     self._walk_cmd[0] * target_walk[0] < 0.0
                     and abs(target_walk[0]) >= 0.30
@@ -313,6 +422,9 @@ class CESGraspActionProvider(DDSRLActionProvider):
             full_action.zero_()
             if policy_action is not None:
                 full_action[self.action_to_indices] = policy_action.reshape(-1)
+            elif self._squeeze and self._last_policy_legs is not None:
+                # 仅到站钉盆：腿保持走路末姿态。走路时不要改腰，否则会越走越歪。
+                full_action[self.action_to_indices] = self._last_policy_legs
             else:
                 full_action[self.action_to_indices] = self._leg_default[0]
             full_action[self.waist_to_all_indices] = self.default_waist_positions[0]
@@ -354,10 +466,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
             if self.fsm.phase.value in ("release", "retract", "settle"):
                 self._squeeze = False
                 self._grip_cmd = None
-            # walk→place 换阶段不改开合量：一直用闭合那一帧的目标，避免 PD 力跳变把件夹飞。
-            grip = self._grip_cmd if self._squeeze and self._grip_cmd is not None else cmd.gripper
-            full_action[self._right_grip_idx] = grip
-            full_action[self._left_grip_idx] = C.GRIPPER_OPEN
+                self._grip_logged = False
 
             history_action = full_action.clone()
             if policy_action is None:
@@ -367,6 +476,14 @@ class CESGraspActionProvider(DDSRLActionProvider):
             delayed_actions = self.advance_action_history(history_action)
             if policy_action is not None:
                 self.apply_delayed_policy_legs(full_action, delayed_actions)
+                self._last_policy_legs = full_action[self.action_to_indices].clone()
+
+            # 夹持力只在 RELEASE 才改。写在所有 action 之后，避免被腿/历史缓冲覆盖。
+            if self._squeeze and self._grip_cmd is not None:
+                full_action[self._right_grip_idx] = self._grip_cmd
+            else:
+                full_action[self._right_grip_idx] = cmd.gripper
+            full_action[self._left_grip_idx] = C.GRIPPER_OPEN
 
             lock_upper = (
                 cmd.arm_q is not None or cmd.tcp_pos is not None or self._squeeze
@@ -376,7 +493,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
             robot = self.env.scene["robot"]
             for _ in range(4):
                 if pin_xy is not None and pin_yaw is not None:
-                    self._apply_snap(pin_xy, pin_yaw, pin_z)
+                    self._apply_snap(pin_xy, pin_yaw, pin_z, quat=pin_quat)
                 robot.set_joint_position_target(full_action)
                 if kinematic_arm:
                     self._write_locked_upper_body(full_action)

@@ -4,7 +4,8 @@
 
 路点开：SETTLE → GOTO_PICK → UNFOLD(00→30) → DESCEND(锁XY、只落Z、40 仅 q_ref)
 → GRASP → LIFT → RETURN_HOME(40阶段实时q→30→20→05胸前) → CARRY/HOLD
-→ GOTO_PLACE(snap/walk，保持05) → PLACE_APPROACH(人工关节位姿05→15)
+→ GOTO_PLACE(snap/walk，保持05) → PLACE_HOLD(walk 到站后钉盆冻05)
+→ PLACE_APPROACH(人工关节位姿05→15)
 → PLACE_DESCEND(锁实时XY、Unitree IK只落Z) → RELEASE → RETRACT(逆序回05)。
 
 机器人 spawn 就在抓取站，SETTLE/GOTO_PICK 只是把骨盆钉在原地，不瞬移。
@@ -51,6 +52,7 @@ class CesPickPlacePhase(enum.Enum):
     CARRY = "carry"
     RAISE_FOR_PLACE = "raise_for_place"
     GOTO_PLACE = "goto_place"
+    PLACE_HOLD = "place_hold"
     PLACE_APPROACH = "place_approach"
     PLACE_DESCEND = "place_descend"
     RELEASE = "release"
@@ -75,6 +77,7 @@ class CesCommand:
     arm_q_lo: torch.Tensor | None = None
     arm_q_hi: torch.Tensor | None = None
     snap_z: float | None = None
+    snap_quat: tuple[float, float, float, float] | None = None
 
 
 def top_down_grasp_quat(jaw_axis_w: torch.Tensor) -> torch.Tensor:
@@ -189,6 +192,9 @@ class CesPickPlaceStateMachine:
         self._place_lock_xy: tuple[float, float] | None = None
         self._place_lock_yaw: float | None = None
         self._place_lock_z: float | None = None
+        self._place_lock_quat: tuple[float, float, float, float] | None = None
+        self._place_hold_obj_z0: float | None = None
+        self._carry_drop_logged = False
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
         extra = f" arm_speed=x{self.speed_scale:.2f}"
@@ -273,6 +279,9 @@ class CesPickPlaceStateMachine:
         self._place_lock_xy = None
         self._place_lock_yaw = None
         self._place_lock_z = None
+        self._place_lock_quat = None
+        self._place_hold_obj_z0 = None
+        self._carry_drop_logged = False
         self._spawn_yaw_applied = False
         self._step_err_t = -10.0
 
@@ -296,6 +305,7 @@ class CesPickPlaceStateMachine:
         snap_xy=None,
         snap_yaw=None,
         snap_z=None,
+        snap_quat=None,
         guide=False,
         done=False,
         failed=False,
@@ -335,6 +345,7 @@ class CesPickPlaceStateMachine:
             arm_q_lo=q_lo,
             arm_q_hi=q_hi,
             snap_z=snap_z if snap else None,
+            snap_quat=snap_quat if snap else None,
         )
 
     def _squeezing(self) -> bool:
@@ -350,6 +361,7 @@ class CesPickPlaceStateMachine:
             CesPickPlacePhase.HOLD,
             CesPickPlacePhase.RAISE_FOR_PLACE,
             CesPickPlacePhase.GOTO_PLACE,
+            CesPickPlacePhase.PLACE_HOLD,
             CesPickPlacePhase.PLACE_APPROACH,
             CesPickPlacePhase.PLACE_DESCEND,
         )
@@ -590,6 +602,26 @@ class CesPickPlaceStateMachine:
             return self._place_lock_xy, self._place_lock_yaw
         return C.PLACE_STAND_XY, C.PLACE_STAND_YAW
 
+    def _place_after_walk(self) -> bool:
+        return self.station_mode == "walk" and self._place_lock_xy is not None
+
+    def _place_body_cmd(self, **kwargs) -> CesCommand:
+        """Pin the pelvis for place. After walking, keep the live quaternion.
+
+        Yaw-only snap slams leftover walk pitch/roll to zero and whips the
+        gripper. Arm/gripper stay on PD (not write_joint_state). No gait
+        while snapped — policy + pin explodes.
+        """
+        pin_xy, pin_yaw = self._place_pin_pose()
+        return self._cmd(
+            snap=True,
+            snap_xy=pin_xy,
+            snap_yaw=pin_yaw,
+            snap_z=self._place_lock_z,
+            snap_quat=self._place_lock_quat,
+            **kwargs,
+        )
+
     def _start_grasp(self, err: float):
         """Freeze XY at the actual TCP, but never close below the planned pinch Z."""
         now, _q_now = self.ctx.ik.get_tcp_pose_w()
@@ -675,6 +707,55 @@ class CesPickPlaceStateMachine:
             f"tote=({tx:.4f},{ty:.4f},z={tray_top:.3f}) "
             f"dxy={dxy*1000:.0f}mm above_tray={(z - tray_top)*1000:+.0f}mm"
         )
+
+    def _carry_contact_line(self) -> str:
+        """Product / gripper / pelvis snapshot while still supposed to be holding."""
+        try:
+            obj_pos, _ = self.ctx.get_object_pose_w()
+            obj_z = float(obj_pos[0, 2])
+            tcp, _ = self.ctx.ik.get_tcp_pose_w()
+            tcp_z = float(tcp[0, 2])
+            root_pos, _ = self.ctx.get_base_pose_w()
+            pelvis_z = float(root_pos[0, 2])
+            xy_speed = 0.0
+            obj_speed = 0.0
+            grip = []
+            if hasattr(self.ctx, "get_root_xy_speed"):
+                xy_speed = float(self.ctx.get_root_xy_speed())
+            if hasattr(self.ctx, "get_object_xy_speed"):
+                obj_speed = float(self.ctx.get_object_xy_speed())
+            if hasattr(self.ctx, "get_right_gripper_q"):
+                live = self.ctx.get_right_gripper_q()
+                grip = [round(float(x), 4) for x in live]
+            dz0 = ""
+            if self._place_hold_obj_z0 is not None:
+                dz0 = f" dobj={(obj_z - self._place_hold_obj_z0)*1000:+.0f}mm"
+            return (
+                f"obj_z={obj_z:.3f} tcp_z={tcp_z:.3f} pelvis_z={pelvis_z:.3f} "
+                f"xy_spd={xy_speed:.3f} obj_spd={obj_speed:.3f} "
+                f"grip_q={grip} tgt={C.GRIPPER_CLOSED:.3f}{dz0}"
+            )
+        except Exception as exc:
+            return f"contact_log_fail={exc}"
+
+    def _log_carry_contact(self, tag: str):
+        print(f"[ces_fsm] {tag} {self._carry_contact_line()}")
+
+    def _watch_carry_drop(self, where: str):
+        """Print once if the product falls >5 cm from the walk-arrive height."""
+        if self._carry_drop_logged or self._place_hold_obj_z0 is None:
+            return
+        try:
+            obj_pos, _ = self.ctx.get_object_pose_w()
+        except Exception:
+            return
+        obj_z = float(obj_pos[0, 2])
+        dz = obj_z - self._place_hold_obj_z0
+        if dz < -0.05:
+            self._carry_drop_logged = True
+            self._log_carry_contact(
+                f"DROP during {where} dz={dz*1000:.0f}mm"
+            )
 
     def _begin_return_home(self):
         """抬起后沿清单回收到胸前姿态，件夹在手里一起回来。
@@ -787,6 +868,8 @@ class CesPickPlaceStateMachine:
             CesPickPlacePhase.APPROACH,
             CesPickPlacePhase.GOTO_PICK,
             CesPickPlacePhase.GOTO_PLACE,
+            CesPickPlacePhase.PLACE_HOLD,
+            CesPickPlacePhase.PLACE_APPROACH,
         ) else 1.0
         if self._log_t < interval:
             return
@@ -813,6 +896,11 @@ class CesPickPlaceStateMachine:
                 f"head={math.degrees(yaw):.0f} err={math.degrees(yaw_err):+.0f}deg "
                 f"z={z:.3f} {extra}"
             ).strip()
+        if (
+            self.phase is CesPickPlacePhase.PLACE_HOLD
+            or self.phase is CesPickPlacePhase.PLACE_APPROACH
+        ):
+            extra = f"{self._carry_contact_line()} {extra}".strip()
         print(
             f"[ces_fsm] {self.phase.value} t={self.t:.1f}s grip={self.gripper:.3f} "
             f"tcp_err={tcp_err*1000:.1f}mm tilt={self.ctx.stance_tilt():.2f} "
@@ -1016,11 +1104,16 @@ class CesPickPlaceStateMachine:
             self._place_pos_w = None
             self._place_quat_w = None
             self._place_limits = None
+            balance = (
+                "; pin live pelvis quat, arm PD, gripper locked, no gait"
+                if self._place_after_walk()
+                else ""
+            )
             print(
                 f"[ces_fsm] Place joint path {self._waypoints.place_start}→"
                 f"{'→'.join(names)} dur={self._place_joint_total_time:.2f}s "
                 f"interp={self._waypoints.place_interpolation_method} "
-                f"live_vs_05={start_error:.4f}rad (gripper closed)"
+                f"live_vs_05={start_error:.4f}rad (gripper closed){balance}"
             )
             return
 
@@ -1327,11 +1420,12 @@ class CesPickPlaceStateMachine:
                 )
             # walk：pick 一结束就满幅发 S 后退（世界 +X），不要钉盆等站稳。
             # 等站稳再松盆、再从 0 ramp 后退，抱件会先往前栽进 CES。
+            # 同时清掉 pick 阶段 vx=0 的观测栈，否则策略会先往前凑两步。
             if self.station_mode == "walk":
                 self._walk = [-C.WALK_VX, 0.0, 0.0, C.CARRY_WALK_GAIT.height]
                 if hasattr(self.ctx, "prime_walk_filt"):
                     self.ctx.prime_walk_filt(self._walk)
-                print("[ces_fsm] pick done — S backoff now (no stand wait)")
+                print("[ces_fsm] pick done — S backoff now (flush stand obs, kick reverse)")
                 self._transition(CesPickPlacePhase.GOTO_PLACE)
                 return self._cmd(tcp=None, arm_q=q, guide=True)
             if self.t >= C.CARRY_TIME:
@@ -1423,13 +1517,24 @@ class CesPickPlaceStateMachine:
                 return self._cmd(tcp=None, arm_q=q, failed=True)
             if arrived:
                 if walking:
-                    root_pos, _ = self.ctx.get_base_pose_w()
+                    root_pos, root_quat = self.ctx.get_base_pose_w()
                     self._place_lock_xy = (
                         float(root_pos[0, 0]),
                         float(root_pos[0, 1]),
                     )
                     self._place_lock_yaw = self.ctx.get_heading()
                     self._place_lock_z = float(root_pos[0, 2])
+                    self._place_lock_quat = (
+                        float(root_quat[0, 0]),
+                        float(root_quat[0, 1]),
+                        float(root_quat[0, 2]),
+                        float(root_quat[0, 3]),
+                    )
+                    # Keep the live arm at pin so the snap does not slew toward authored 05.
+                    q = self.ctx.get_right_arm_q()[0].clone()
+                    self._carry_arm_q = q
+                    if hasattr(self.ctx, "_q_right"):
+                        self.ctx._q_right = q.clone()
                     xy, yaw = self._place_pin_pose()
                     # Split the error along the approach axis vs sideways.
                     # "along" positive means stopped short of the stand (safe),
@@ -1465,10 +1570,26 @@ class CesPickPlaceStateMachine:
                         f"[把 WALK_STOP_MARGIN_PLACE"
                         f"（现 {C.WALK_STOP_MARGIN_PLACE:.2f}）设成 coast + 0.05，"
                         f"along 必须 >0：桌沿只在放置站前 "
-                        f"{C.WALK_TABLE_AHEAD_OF_STAND*1000:.0f}mm]"
+                        f"{C.WALK_TABLE_AHEAD_OF_STAND*1000:.0f}mm] "
+                        f"gripper stays locked closed"
                     )
-                self._begin_place_approach()
-                self._transition(CesPickPlacePhase.PLACE_APPROACH)
+                    try:
+                        obj_pos, _ = self.ctx.get_object_pose_w()
+                        self._place_hold_obj_z0 = float(obj_pos[0, 2])
+                    except Exception:
+                        self._place_hold_obj_z0 = None
+                    self._carry_drop_logged = False
+                    self._log_carry_contact("walk_arrived — pin live pelvis quat")
+                    print(
+                        f"[ces_fsm] freeze 05 at place stand for "
+                        f"{C.WALK_PLACE_HOLD_TIME:.1f}s "
+                        f"(pin xy/z + live quat; arm PD, gripper locked, no gait)"
+                    )
+                    self._transition(CesPickPlacePhase.PLACE_HOLD)
+                    return self._place_body_cmd(tcp=None, arm_q=q)
+                else:
+                    self._begin_place_approach()
+                    self._transition(CesPickPlacePhase.PLACE_APPROACH)
             return self._cmd(
                 tcp=None,
                 arm_q=q,
@@ -1479,8 +1600,26 @@ class CesPickPlaceStateMachine:
                 guide=walking and not pin,
             )
 
+        if self.phase is CesPickPlacePhase.PLACE_HOLD:
+            self.gripper = C.GRIPPER_CLOSED
+            q = self._carry_arm_q
+            if q is None:
+                q = self.ctx.get_right_arm_q()[0].clone()
+                self._carry_arm_q = q
+            self._watch_carry_drop("place_hold")
+            if self.t <= self.ctx.dt + 1e-6:
+                self._log_carry_contact("place_hold pinned (live quat, arm/gripper unchanged)")
+            if self.t >= C.WALK_PLACE_HOLD_TIME:
+                self._log_carry_contact(
+                    "place_hold done — pelvis still pinned, starting 05→15"
+                )
+                self._begin_place_approach()
+                self._transition(CesPickPlacePhase.PLACE_APPROACH)
+            return self._place_body_cmd(tcp=None, arm_q=q)
+
         if self.phase is CesPickPlacePhase.PLACE_APPROACH:
             self.gripper = C.GRIPPER_CLOSED
+            self._watch_carry_drop("place_approach")
             if self._using_place_joint_path:
                 q = self.joint_interp.step(self.ctx.dt)
                 if q is None:
@@ -1495,15 +1634,7 @@ class CesPickPlaceStateMachine:
                         "next: lock live XY and descend only Z"
                     )
                     self._transition(CesPickPlacePhase.PLACE_DESCEND)
-                pin_xy, pin_yaw = self._place_pin_pose()
-                return self._cmd(
-                    tcp=None,
-                    arm_q=q,
-                    snap=True,
-                    snap_xy=pin_xy,
-                    snap_yaw=pin_yaw,
-                    snap_z=self._place_lock_z,
-                )
+                return self._place_body_cmd(tcp=None, arm_q=q)
 
             drop = self._place_pos_w if self._place_pos_w is not None else self._place_drop_pos()
             pos, _quat = self.interp.step(self.ctx.dt)
@@ -1519,16 +1650,11 @@ class CesPickPlaceStateMachine:
                 )
                 self._log_tcp("place_release")
                 self._transition(CesPickPlacePhase.RELEASE)
-            pin_xy, pin_yaw = self._place_pin_pose()
-            return self._cmd(
+            return self._place_body_cmd(
                 tcp=pos,
                 quat=self._place_quat_w,
                 arm_q_ref=self._q_ref_for_place(),
                 arm_limits=self._place_limits,
-                snap=True,
-                snap_xy=pin_xy,
-                snap_yaw=pin_yaw,
-                snap_z=self._place_lock_z,
             )
 
         if self.phase is CesPickPlacePhase.PLACE_DESCEND:
@@ -1558,30 +1684,18 @@ class CesPickPlaceStateMachine:
                     )
                     self._log_tcp("place_release")
                     self._transition(CesPickPlacePhase.RELEASE)
-                pin_xy, pin_yaw = self._place_pin_pose()
-                return self._cmd(
+                return self._place_body_cmd(
                     tcp=pos,
                     quat=None,
                     arm_q_ref=self._q_ref_for_place(),
                     arm_limits=self._place_limits,
-                    snap=True,
-                    snap_xy=pin_xy,
-                    snap_yaw=pin_yaw,
-                    snap_z=self._place_lock_z,
                 )
 
             # Legacy manifests keep the historical immediate release fallback.
             self._place_arm_q = self.ctx.get_right_arm_q()[0].clone()
             print("[ces_fsm] skip place-descend — release at current height")
             self._transition(CesPickPlacePhase.RELEASE)
-            pin_xy, pin_yaw = self._place_pin_pose()
-            return self._cmd(
-                arm_q=self._place_arm_q,
-                snap=True,
-                snap_xy=pin_xy,
-                snap_yaw=pin_yaw,
-                snap_z=self._place_lock_z,
-            )
+            return self._place_body_cmd(arm_q=self._place_arm_q)
 
         if self.phase is CesPickPlacePhase.RELEASE:
             self.gripper = C.GRIPPER_OPEN
@@ -1590,15 +1704,7 @@ class CesPickPlaceStateMachine:
                 self._log_place_result("release_done")
                 self._begin_retract()
                 self._transition(CesPickPlacePhase.RETRACT)
-            pin_xy, pin_yaw = self._place_pin_pose()
-            return self._cmd(
-                tcp=None,
-                arm_q=q,
-                snap=True,
-                snap_xy=pin_xy,
-                snap_yaw=pin_yaw,
-                snap_z=self._place_lock_z,
-            )
+            return self._place_body_cmd(tcp=None, arm_q=q)
 
         if self.phase is CesPickPlacePhase.RETRACT:
             self.gripper = C.GRIPPER_OPEN
@@ -1610,15 +1716,7 @@ class CesPickPlaceStateMachine:
                 print("[ces_fsm] arm back at carry posture — task done")
                 self._log_place_result("task_done")
                 self._transition(CesPickPlacePhase.DONE)
-            pin_xy, pin_yaw = self._place_pin_pose()
-            return self._cmd(
-                tcp=None,
-                arm_q=q,
-                snap=True,
-                snap_xy=pin_xy,
-                snap_yaw=pin_yaw,
-                snap_z=self._place_lock_z,
-            )
+            return self._place_body_cmd(tcp=None, arm_q=q)
 
         if self.phase is CesPickPlacePhase.DONE:
             if self.stop_after == "lift":

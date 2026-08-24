@@ -221,6 +221,15 @@ class TestCarryRoute(unittest.TestCase):
         self.assertLess(step.command[0], 0.0)
         self.assertEqual(step.command[2], 0.0)
 
+    def test_body_reverse_at_pick_yaw_is_world_plus_x(self):
+        """S at pick yaw=π must be world +X (away from CES), never toward it."""
+        vx_body = -GAIT.vx
+        world_x = vx_body * math.cos(PICK_YAW)
+        world_y = vx_body * math.sin(PICK_YAW)
+        self.assertGreater(world_x, 0.0)
+        self.assertAlmostEqual(world_y, 0.0, places=6)
+        self.assertAlmostEqual(world_x, GAIT.vx, places=6)
+
     def test_turn_leg_is_clockwise_and_keeps_reversing(self):
         planner = navigation.LegWalkPlanner(route(), GAIT)
         corner = route()[0].target_xy

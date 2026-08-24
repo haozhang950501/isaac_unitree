@@ -201,6 +201,9 @@ WALK_YAW_ARRIVE_FINAL = WALK_ALIGN_YAW
 WALK_REALIGN_YAW = 0.60  # 歪太多：停下平移，先转正
 WALK_LEG_SETTLE = 0.5  # 每段之间零指令停稳，避免后退接右转时混合指令
 WALK_ARRIVE_HOLD = 0.35
+# walk 到站后先钉盆、冻 05、夹爪不动，再开始 05→15。用来分流：
+# 一钉就掉 = 动态根切运动学钉盆打断接触；钉住还能拿着、一伸 15 才掉 = 关节轨迹。
+WALK_PLACE_HOLD_TIME = 1.5
 WALK_PLACE_TIMEOUT = 60.0
 WALK_GOTO_TIMEOUT = 20.0
 WALK_VX_ACCEL = 1.00
