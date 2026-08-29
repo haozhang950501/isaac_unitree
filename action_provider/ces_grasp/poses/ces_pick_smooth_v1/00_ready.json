@@ -86,5 +86,5 @@
     "min_joint_limit_margin_rad": 1.2244,
     "joint_limit_violations": []
   },
-  "source_pose_file": "../ces_pick_natural_v2/00_ready.json"
+  "runtime_role": "baseline_forward_start"
 }

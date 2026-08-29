@@ -1,6 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""Leg-based body-frame walk planning for the CES carry (HOLD -> place stand).
+"""Leg-based body-frame walk planning for the CES carry (CARRY -> place stand).
 
 The whole-body policy ignores small velocity commands: tapping keyboard WASD
 does not move the robot, only a held key ramps the command high enough to make

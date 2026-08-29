@@ -123,5 +123,5 @@
     ],
     "max_abs_delta_from_previous_rad": 0.6461002
   },
-  "source_pose_file": "../ces_pick_natural_v2/30_pre_grasp_vertical.json"
+  "runtime_role": "baseline_joint_to_cartesian_handoff"
 }

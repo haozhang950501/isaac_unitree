@@ -15,6 +15,7 @@ from isaaclab.managers import SceneEntityCfg
 
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
     PLACE_TRAY_HEIGHT,
+    PRODUCT_DROP_Z,
     TABLE_SPAWN_POS,
     TABLE_TOP_Z,
 )
@@ -46,7 +47,7 @@ def compute_reward(
     table_y: float = TABLE_SPAWN_POS[1],
     half_x: float = 1.15,
     half_y: float = 0.40,
-    drop_height: float = 0.32,
+    drop_height: float = PRODUCT_DROP_Z,
     place_z_min: float = TABLE_TOP_Z + 0.01,
     place_z_max: float = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.12,
 ) -> torch.Tensor:

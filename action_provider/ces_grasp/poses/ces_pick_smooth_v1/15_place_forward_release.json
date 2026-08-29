@@ -20,8 +20,8 @@
     0.005500171,
     1.1593101
   ],
-  "purpose": "User-authored Place pose 15. Unitree commands 05 -> 15 in joint space, then holds the live TCP X/Y and uses position-only IK for the final Z-only descent.",
-  "control_role": "place_joint_space_endpoint_before_vertical_ik",
+  "purpose": "User-authored Place pose 15. Unitree commands 05 -> 15 in joint space and releases the product at this endpoint.",
+  "control_role": "place_joint_space_release_endpoint",
   "unitree_arm_q_allowed": true,
   "source": "manual_urdf_viz_capture",
   "source_pose": "urdf_pose_toolkit/poses/ces_place_from_05_v1/15_forward_extend_draft.json",
@@ -49,5 +49,5 @@
     "min_joint_limit_margin_rad": 0.535119358,
     "joint_limit_violations": []
   },
-  "validation_boundary": "URDF-viz kinematic authoring only; final Z target, product clearance, collisions, friction, and release require Isaac Sim acceptance."
+  "validation_boundary": "URDF-viz kinematic authoring only; runtime physics is not evaluated by this metadata."
 }

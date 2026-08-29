@@ -231,6 +231,10 @@ python sim_main.py \
   --ces_pick_speed 1.5
 ```
 
+The runtime now supports only the `ces_pick_smooth_v1` Baseline. The compatibility
+arguments in the command above remain accepted, but only the values shown are
+valid; omitting `--ces_use_joint_waypoints` no longer selects a Cartesian path.
+
 `ces_pick_smooth_v1` commands the forward joint path
 `00 -> 10 -> 20 -> 30`. Pose 40 remains a dynamic null-space reference for
 the Cartesian grasp descent and is never hard-commanded as an arm pose. After
@@ -239,24 +243,18 @@ returns to pose 30, passes through pose 20 to clear the drawer edge, and then
 moves to the newly user-authored pose 05 in front of the chest:
 `40(live) -> 30 -> 20 -> 05`. The authored segment times are
 `0.8 / 1.2 / 3.0` seconds, or about `0.53 / 0.80 / 2.00` seconds at the
-default `1.5` speed scale. The older
-`ces_pick_natural_v1` and `ces_pick_natural_v2` sets retain their compatible
-return-to-00 behavior.
+default `1.5` speed scale.
 
 The same Smooth V1 manifest now owns the approved Place handoff. The product
 stays in pose 05 while changing stations, then Unitree commands the
 user-authored joint path `05 -> 15_place_forward_release` with a 3.2-second
 segment smoothstep (about 2.13 seconds at the default 1.5 speed scale). At pose
-15 the runtime reads the actual TCP, preserves that live X/Y exactly, and uses
-the existing Cartesian interpolator plus position-only IK to descend only Z.
-It does not target the tote-center X/Y or an orientation, and pose 25 is not
-part of the runtime path. The initial Z target is 20 mm above the tote rim;
-if the live pose 15 is already lower, the descend-only policy does not raise or
-push it farther down.
+15 the gripper opens immediately; there is no Cartesian Place descent, tote-center
+X/Y target, orientation target, or pose 25. The arm then retracts `15 -> 05`.
 
-The return via pose 20 and the Place 05-to-15 contract are covered by CPU
-tests. Product clearance, final Z clearance, grip friction, release, and
-walking balance must still be accepted in Isaac Sim.
+The return via pose 20, walk handoff, live-pelvis pin, and Place 05-to-15
+contracts are covered by CPU/static tests. These checks do not claim Isaac Sim
+physics results.
 
 #### 2.4.3 Data Replay
 

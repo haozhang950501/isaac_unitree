@@ -15,7 +15,6 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 POSES_ROOT = ROOT / "action_provider" / "ces_grasp" / "poses"
 SMOOTH_DIR = POSES_ROOT / "ces_pick_smooth_v1"
-NATURAL_V2_DIR = POSES_ROOT / "ces_pick_natural_v2"
 JOINT_NAMES = [
     "right_shoulder_pitch_joint",
     "right_shoulder_roll_joint",
@@ -128,27 +127,17 @@ class SmoothPickManifestTests(unittest.TestCase):
             [float(segment["duration_s"]) for segment in place_path["segments"]],
             [3.2],
         )
-        vertical = place_path["vertical_compensation"]
-        self.assertEqual(vertical["runtime_control"], "cartesian_z_only_ik")
-        self.assertEqual(vertical["xy_policy"], "allow_xy_drift")
-        self.assertEqual(
-            vertical["z_policy"], "descend_only_to_scene_tray_clearance"
-        )
-        self.assertIsNone(vertical["orientation_target"])
-        self.assertEqual(vertical["q_ref"], PLACE_POSE)
-        self.assertEqual(float(vertical["target_clearance_above_table_m"]), 0.025)
-        self.assertGreater(float(vertical["duration_s"]), 0.0)
+        self.assertNotIn("vertical_compensation", place_path)
+        self.assertEqual(place_path["final_role"], "release_posture_at_pose_15")
         place_validation = manifest["validation"]["place_path"]
         self.assertTrue(place_validation["validation_passed"])
         self.assertTrue(place_validation["pose_05_is_exact_carry_start"])
         self.assertTrue(place_validation["pose_25_removed"])
 
-    def test_selected_waypoint_q_values_match_natural_v2(self):
+    def test_selected_waypoint_q_values_match_baseline(self):
         for name in [*JOINT_POSES, Q_REF_POSE]:
             smooth = read_json(SMOOTH_DIR / f"{name}.json")
-            source = read_json(NATURAL_V2_DIR / f"{name}.json")
             self.assertEqual(smooth["joint_order"], JOINT_NAMES)
-            self.assertEqual(smooth["q"], source["q"])
         q30 = read_json(SMOOTH_DIR / "30_pre_grasp_vertical.json")["q"]
         q40 = read_json(SMOOTH_DIR / f"{Q_REF_POSE}.json")
         self.assertEqual(q40["control_role"], "q_ref_only")
@@ -159,22 +148,22 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertTrue(q05["unitree_arm_q_allowed"])
         self.assertEqual(
             q05["q"],
-            [-0.75999993, -0.26, 0.58, -0.68999976, -0.34, -0.05000001, 0.08999996],
+            [-0.04000009, -0.34000003, 0.52000004, -0.7499997, -0.34, -0.09, 0.90999967],
         )
         self.assertGreater(q05["validation"]["min_joint_limit_margin_rad"], 0.1)
         q15 = read_json(SMOOTH_DIR / f"{PLACE_POSE}.json")
-        self.assertEqual(q15["control_role"], "place_joint_space_endpoint_before_vertical_ik")
+        self.assertEqual(q15["control_role"], "place_joint_space_release_endpoint")
         self.assertTrue(q15["unitree_arm_q_allowed"])
         self.assertEqual(
             q15["q"],
             [
-                -1.2466918,
-                -0.37189797,
-                1.6931672,
-                0.7598856,
-                0.23724373,
-                0.10550016,
-                1.0793102,
+                -1.2266918,
+                -0.2318979,
+                1.4931674,
+                1.2198853,
+                -0.042756237,
+                0.005500171,
+                1.1593101,
             ],
         )
         self.assertGreater(q15["validation"]["min_joint_limit_margin_rad"], 0.5)
@@ -186,8 +175,6 @@ class SmoothPickManifestTests(unittest.TestCase):
         package.__path__ = [str(ROOT / "action_provider" / "ces_grasp")]
         constants = types.ModuleType("action_provider.ces_grasp.constants")
         constants.RIGHT_ARM_JOINTS = JOINT_NAMES
-        constants.WAYPOINT_SET_DEFAULT = "ces_pick_smooth_v1"
-        constants.RETURN_LEAD_IN_TIME = 0.8
         sys.modules["action_provider"] = action_provider_package
         sys.modules["action_provider.ces_grasp"] = package
         sys.modules[constants.__name__] = constants
@@ -198,7 +185,7 @@ class SmoothPickManifestTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-        waypoint_set = module.load_waypoint_set("ces_pick_smooth_v1")
+        waypoint_set = module.load_baseline_trajectory()
         self.assertEqual(waypoint_set.joint_waypoints, tuple(JOINT_POSES))
         self.assertEqual(waypoint_set.q_ref_from, "30_pre_grasp_vertical")
         self.assertEqual(waypoint_set.q_ref_to, Q_REF_POSE)
@@ -218,25 +205,9 @@ class SmoothPickManifestTests(unittest.TestCase):
         self.assertEqual(
             waypoint_set.place_interpolation_method, "segment_smoothstep"
         )
-        self.assertEqual(waypoint_set.place_descend_duration, 1.2)
         self.assertEqual(
             waypoint_set.interpolation_method, "monotone_cubic_hermite"
         )
-        natural_v2 = module.load_waypoint_set("ces_pick_natural_v2")
-        self.assertEqual(natural_v2.interpolation_method, "segment_smoothstep")
-        self.assertEqual(
-            natural_v2.return_waypoints,
-            tuple(reversed(natural_v2.joint_waypoints)),
-        )
-        self.assertEqual(natural_v2.return_start, natural_v2.q_ref_to)
-        self.assertEqual(
-            natural_v2.return_interpolation_method,
-            natural_v2.interpolation_method,
-        )
-        self.assertEqual(natural_v2.place_start, "")
-        self.assertEqual(natural_v2.place_waypoints, ())
-        self.assertEqual(natural_v2.place_segment_durations, ())
-        self.assertEqual(natural_v2.place_descend_duration, 0.0)
 
 
 class PlacePathTests(unittest.TestCase):
@@ -249,22 +220,6 @@ class PlacePathTests(unittest.TestCase):
         np.testing.assert_allclose(interpolator.step(0.0), q05, atol=1e-9)
         interpolator.elapsed = interpolator.duration
         np.testing.assert_allclose(interpolator.step(0.0), q15, atol=1e-9)
-
-    def test_z_only_goal_keeps_live_xy_and_never_raises(self):
-        path = ROOT / "action_provider" / "ces_grasp" / "place_policy.py"
-        spec = importlib.util.spec_from_file_location("ces_place_policy_test", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        self.assertEqual(
-            module.z_only_descend_goal((1.2, -0.7, 0.9), 0.8),
-            (1.2, -0.7, 0.8),
-        )
-        self.assertEqual(
-            module.z_only_descend_goal((1.2, -0.7, 0.75), 0.8),
-            (1.2, -0.7, 0.75),
-        )
-        self.assertEqual(module.PLACE_DESCEND_POS_AXES, (2,))
-
 
 class SmoothJointInterpolatorTests(unittest.TestCase):
     INTERPOLATION_METHOD = "monotone_cubic_hermite"

@@ -97,5 +97,5 @@
     ],
     "max_abs_delta_from_previous_rad": 1.239
   },
-  "source_pose_file": "../ces_pick_natural_v2/20_right_shift_wrist_down.json"
+  "runtime_role": "baseline_forward_and_return_clearance_waypoint"
 }

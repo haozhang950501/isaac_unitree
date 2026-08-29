@@ -106,7 +106,7 @@
   ],
   "wrist_source": "30_pre_grasp_vertical",
   "tcp_target": null,
-  "source_pose_file": "../ces_pick_natural_v2/40_grasp_posture_ref.json",
+  "runtime_role": "dynamic_q_ref_only",
   "preview_role": "urdf_viz_visualization_only",
   "unitree_arm_q_allowed": false
 }

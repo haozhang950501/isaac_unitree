@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "name": "ces_pick_smooth_v1",
-  "source_pose_set": "ces_pick_natural_v2",
   "runtime_ready": true,
   "joint_order": [
     "right_shoulder_pitch_joint",
@@ -133,17 +132,7 @@
       }
     ],
     "interpolation": "segment_smoothstep",
-    "vertical_compensation": {
-      "runtime_control": "cartesian_z_only_ik",
-      "xy_policy": "allow_xy_drift",
-      "z_policy": "descend_only_to_scene_tray_clearance",
-      "target_constant": "PLACE_FINAL_TCP_Z",
-      "target_clearance_above_table_m": 0.025,
-      "orientation_target": null,
-      "q_ref": "15_place_forward_release",
-      "duration_s": 1.2
-    },
-    "final_role": "release_posture_after_z_only_ik"
+    "final_role": "release_posture_at_pose_15"
   },
   "planning": {
     "removed_as_redundant": [
@@ -211,8 +200,8 @@
       "authored_05_to_15_duration_s": 3.2,
       "max_abs_joint_delta_rad": 1.44988536,
       "min_joint_limit_margin_rad": 0.535119358,
-      "final_xy_policy": "allow_xy_drift",
-      "final_z_control": "cartesian_z_only_ik"
+      "release_policy": "open_gripper_at_pose_15",
+      "final_cartesian_control": null
     },
     "max_abs_velocity_by_joint_rad_s": [
       0.818569837,

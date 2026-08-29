@@ -100,30 +100,28 @@ parser.add_argument(
 parser.add_argument(
     "--station_mode",
     type=str,
-    default="snap",
-    choices=["snap", "walk"],
-    help=(
-        "CES relocation after HOLD: snap = teleport (default); "
-        "walk = turn toward world-frame route and use the whole-body policy to walk to place"
-    ),
+    default="walk",
+    choices=["walk"],
+    help="CES Baseline compatibility option; only walk is supported",
 )
 parser.add_argument(
     "--ces_stop_after",
     type=str,
     default="place",
-    choices=["lift", "place"],
-    help="CES FSM: stop after lifting the part, or run close-lift-hold-place (default)",
+    choices=["place"],
+    help="CES Baseline compatibility option; only the complete place task is supported",
 )
 parser.add_argument(
     "--ces_use_joint_waypoints",
     action="store_true",
-    help="CES pick: joint-space waypoints 00-30, then real TCP/IK descend with q_ref 30-40",
+    help="CES Baseline compatibility flag; joint waypoints are always enabled",
 )
 parser.add_argument(
     "--ces_waypoint_set",
     type=str,
     default="ces_pick_smooth_v1",
-    help="CES joint waypoint set under action_provider/ces_grasp/poses/",
+    choices=["ces_pick_smooth_v1"],
+    help="CES Baseline compatibility option; only ces_pick_smooth_v1 is supported",
 )
 parser.add_argument(
     "--ces_pick_speed",

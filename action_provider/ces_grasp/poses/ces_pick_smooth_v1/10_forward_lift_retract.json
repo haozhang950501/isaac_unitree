@@ -97,5 +97,5 @@
     ],
     "max_abs_delta_from_previous_rad": 1.05
   },
-  "source_pose_file": "../ces_pick_natural_v2/10_forward_lift_retract.json"
+  "runtime_role": "baseline_forward_waypoint"
 }

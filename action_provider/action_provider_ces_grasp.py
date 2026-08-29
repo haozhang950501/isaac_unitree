@@ -1,6 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""CES 取放动作：抓取定位，HOLD 后可用全身策略步行换站。"""
+"""CES Baseline action provider: pinned pick, carry-walk, and pinned place."""
 from __future__ import annotations
 
 import math
@@ -9,7 +9,10 @@ import torch
 
 from action_provider.action_provider_wh_dds import DDSRLActionProvider
 from action_provider.ces_grasp import constants as C
-from action_provider.ces_grasp.state_machine import CesPickPlaceStateMachine
+from action_provider.ces_grasp.state_machine import (
+    CesPickPlacePhase,
+    CesPickPlaceStateMachine,
+)
 from action_provider.manip_common import ArmDiffIK
 from isaaclab.utils.math import quat_mul
 
@@ -19,8 +22,6 @@ class CESGraspActionProvider(DDSRLActionProvider):
         super().__init__(env, args_cli)
         self.name = "CESGrasp"
         self.dt = float(4 * env.physics_dt)
-        requested_station_mode = getattr(args_cli, "station_mode", "snap")
-        self.station_mode = requested_station_mode if requested_station_mode in ("snap", "walk") else "snap"
         self.ik = ArmDiffIK(
             env.scene["robot"],
             C.RIGHT_ARM_JOINTS,
@@ -35,10 +36,6 @@ class CESGraspActionProvider(DDSRLActionProvider):
         )
         self.fsm = CesPickPlaceStateMachine(
             self,
-            self.station_mode,
-            stop_after=getattr(args_cli, "ces_stop_after", C.STOP_AFTER) or C.STOP_AFTER,
-            use_joint_waypoints=bool(getattr(args_cli, "ces_use_joint_waypoints", False)),
-            waypoint_set=getattr(args_cli, "ces_waypoint_set", None) or C.WAYPOINT_SET_DEFAULT,
             speed_scale=getattr(args_cli, "ces_pick_speed", None),
         )
         robot = env.scene["robot"]
@@ -83,19 +80,16 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._hold_yaw: float | None = None
         self._hold_z: float | None = None
         self._grip_cmd: float | None = None
-        self._grip_logged = False
         self._last_policy_legs = None
         self._product_brake_pending = False
         self._q_right = self._right_arm_default[0].clone()
         self._squeeze = False
         self._err_logged = False
         self._err_t = -10.0
-        wp = "on" if self.fsm.use_joint_waypoints else "off"
         print(
-            f"[CESGrasp] v9 carry-walk station_mode={self.station_mode} "
+            f"[CESGrasp] Baseline Smooth V1 carry-walk "
             f"pick_stand={tuple(round(x, 3) for x in C.PICK_STAND_XY)} "
             f"place_stand={tuple(round(x, 3) for x in C.PLACE_STAND_XY)} "
-            f"joint_waypoints={wp} "
             f"(no TCP weld; Dex1 PD squeeze + pad friction)"
         )
 
@@ -110,7 +104,6 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._hold_z = None
         self._walk_prime = None
         self._last_policy_legs = None
-        self._grip_logged = False
         self._product_brake_pending = False
         self.reset_walk_filt()
         self._err_logged = False
@@ -211,16 +204,10 @@ class CESGraspActionProvider(DDSRLActionProvider):
         lin = self.env.scene["object"].data.root_lin_vel_w[0]
         return float(torch.sqrt(lin[0] * lin[0] + lin[1] * lin[1]).item())
 
-    def get_right_arm_home_q(self):
-        """USD 默认右臂姿态（任务启动时的初始臂姿）。"""
-        return self._right_arm_default.clone()
-
     def _slew_arm(self, q_tgt: torch.Tensor) -> torch.Tensor:
         # 夹持冻臂时慢跟；抬起走规划关节轨迹，不能限太死。
         phase = self.fsm.phase.value
-        slow = self._squeeze and phase in (
-            "carry", "hold", "goto_place", "place_hold"
-        )
+        slow = self._squeeze and phase in ("carry", "goto_place", "place_hold")
         lim = C.ARM_SLEW_RAD_LIFT if slow else C.ARM_SLEW_RAD
         dq = q_tgt - self._q_right
         dq = torch.clamp(dq, -lim, lim)
@@ -317,18 +304,6 @@ class CESGraspActionProvider(DDSRLActionProvider):
             self._stop_held_product()
             self._product_brake_pending = False
 
-    def _soft_stop_roots(self):
-        """Zero pelvis and product velocity without writing poses.
-
-        ``write_root_pose`` after walking slams leftover pitch/roll to a
-        yaw-only quat and resets pad contacts, which ejects the part.
-        """
-        robot = self.env.scene["robot"]
-        vel = torch.zeros(1, 6, device=self.env.device, dtype=robot.data.root_pos_w.dtype)
-        robot.write_root_velocity_to_sim(vel)
-        if self._squeeze:
-            self._stop_held_product()
-
     def _translate_object_with_snap(
         self, old_x: float, old_y: float, dx: float, dy: float, dyaw: float
     ):
@@ -365,14 +340,12 @@ class CESGraspActionProvider(DDSRLActionProvider):
     def get_action(self, env):
         try:
             cmd = self.fsm.step()
-            if self.fsm.phase.value == "settle":
+            if self.fsm.phase is CesPickPlacePhase.SETTLE:
                 self._err_logged = False
 
-            walk_active = self.station_mode == "walk" and cmd.guide
+            walk_active = cmd.guide
             walk_failed_stop = (
-                self.station_mode == "walk"
-                and self.fsm.phase.value == "failed"
-                and self._squeeze
+                self.fsm.phase is CesPickPlacePhase.FAILED and self._squeeze
             )
             policy_active = walk_active or walk_failed_stop
 
@@ -430,7 +403,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
             full_action[self.waist_to_all_indices] = self.default_waist_positions[0]
             full_action[self._left_arm_idx] = self._left_arm_default[0]
             if cmd.arm_q is not None:
-                if self.fsm.use_joint_waypoints and self.fsm.phase.value == "descend":
+                if self.fsm.phase is CesPickPlacePhase.DESCEND:
                     print("[ces_verify] ERROR arm_q hard-set during DESCEND (40 must be q_ref only)")
                 full_action[self._right_arm_idx] = self._slew_arm(
                     cmd.arm_q.to(full_action.dtype)
@@ -441,9 +414,6 @@ class CESGraspActionProvider(DDSRLActionProvider):
                         cmd.tcp_pos,
                         cmd.tcp_quat,
                         q_ref=cmd.arm_q_ref,
-                        q_lo=cmd.arm_q_lo,
-                        q_hi=cmd.arm_q_hi,
-                        pos_axes=cmd.ik_pos_axes,
                     )
                     full_action[self._right_arm_idx] = self._slew_arm(q_des[0])
                 except Exception as e:
@@ -464,10 +434,13 @@ class CESGraspActionProvider(DDSRLActionProvider):
                 self._squeeze = True
                 if self._grip_cmd is None:
                     self._grip_cmd = C.GRIPPER_CLOSED
-            if self.fsm.phase.value in ("release", "retract", "settle"):
+            if self.fsm.phase in (
+                CesPickPlacePhase.RELEASE,
+                CesPickPlacePhase.RETRACT,
+                CesPickPlacePhase.SETTLE,
+            ):
                 self._squeeze = False
                 self._grip_cmd = None
-                self._grip_logged = False
 
             history_action = full_action.clone()
             if policy_action is None:

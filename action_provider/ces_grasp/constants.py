@@ -7,15 +7,11 @@ import math
 
 from action_provider.ces_grasp.navigation import WalkGait, build_carry_route
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
-    PICK_STAND_X_B,
     PICK_STAND_XY as SCENE_PICK_STAND_XY,
-    PICK_STAND_Y_B,
     PLACE_TRAY_CENTER_XY,
     PLACE_TRAY_HEIGHT,
-    PRODUCT_POS,
     ROBOT_INIT_POS,
     ROBOT_STAND_YAW,
-    TABLE_SPAWN_POS,
     TABLE_TOP_Z,
 )
 
@@ -50,14 +46,10 @@ LEFT_GRIPPER_JOINTS = ["left_hand_Joint1_1", "left_hand_Joint2_1"]
 
 # 站位：target - (x_b*前 + y_b*左)。抓取站靠近托盘，右手能伸进上料口。
 # 抓取站位与 spawn 同源（机器人直接生成在抓取站，不再瞬移）。
-X_B_PICK = PICK_STAND_X_B
-Y_B_PICK = PICK_STAND_Y_B
 X_B_PLACE = 0.46
 Y_B_PLACE = -0.18
 
-APPROACH_HEIGHT = 0.080
 LIFT_HEIGHT = 0.08  # 刚过托盘沿，胸口高度
-APPROACH_STANDOFF = 0.18
 # 抬起时 TCP 往左（pick yaw=π 时世界 -Y），前臂躲开抽屉沿，朝向不变。
 LIFT_SHIFT_Y = -0.06
 GRASP_INSET = 0.020  # 世界 -X 收进抽屉，避免 +X 指卡槽
@@ -65,13 +57,6 @@ GRASP_SHIFT_Y = 0.0
 PRODUCT_HALF_Z = 0.01275
 GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
-# 旧 Place 回退：TCP 停在灰筐沿上方，不要 IK 贴桌（腕会抖）。
-PLACE_RELEASE_ABOVE_TABLE = 0.08
-# 新 05→15 Place：15 展开后只跟世界 Z 往下压，肩膀可转，X/Y 允许偏移。
-# 松爪贴近桌面/筐底（产品半高约 13 mm），剩下就是很短的自由落体。
-# 以前停在筐沿上方 20 mm，件会再掉进约 10 cm 深的灰筐。
-PLACE_FINAL_TCP_ABOVE_FLOOR = 0.025
-
 # 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
 # _apply_snap 每帧把骨盆写成 STAND_PELVIS_Z、速度清零，所以 is_standing()
 # 从第一帧就为真 —— 原来的 1.0/0.6/0.5（合计 2.1 s）纯粹是空烧。
@@ -84,57 +69,23 @@ STAND_STABLE_TIME = 0.2
 STAND_TILT_MAX = 0.18
 STAND_YAW_RATE_MAX = 0.45
 STAND_XY_SPEED_MAX = 0.12
-APPROACH_TIME = 2.8
-UNFOLD_TIME = 3.2
-ORIENT_TIME = 2.2
-SLIDE_TIME = 2.4
 DESCEND_TIME = 0.70
 # Pose 30 leaves the Dex1 jaw ~68° off world X.  Hover (lock XY/Z) and slerp
 # yaw onto ±X before the Z drop, so DiffIK does not twist while entering the tray.
 GRASP_YAW_ALIGN_TIME = 0.35
 GRASP_TIME = 0.60
-GRASP_POS_TOL = 0.055
 GRASP_WAIT_MAX = 0.25
 LIFT_TIME = 2.2
-# 旧清单回退：抬起后先从实时 q 过渡到第一个逆向路点。smooth_v1 已把同一
-# 0.8 s 写进 manifest 的 40(live)→30 return segment，随后走30→20→05避开抽屉边缘。
-RETURN_LEAD_IN_TIME = 0.8
-RETURN_TIME = 2.5  # 无关节路点时：单段回默认臂姿
-CARRY_TIME = 0.6  # 冻臂 q，不要再笛卡尔收臂（件会掉）
-HOLD_TIME = 0.3
-# 旧清单回退：snap 换站前先在抓取站把件抬过桌面高度。Smooth V1 的新
-# Place 清单保持胸前 05 直接换站，到站后再走人工 05→15，不使用这个常量。
-# q：肩俯仰上抬、肘略收、roll/yaw/腕贴 00，避免外翻和大腕旋。
-PLACE_PRE_RAISE_Q = (-0.60, -0.20, 0.00, 1.15, 0.00, 0.00, 0.00)
-PLACE_PRE_RAISE_TIME = 1.6
-# 旧清单回退：从抬臂姿态先升到放置高度，再水平伸到灰筐上方。
-PLACE_RAISE_FORWARD = 0.06  # 抬臂段顺机体前方挪一点，避免死折肘
-PLACE_RAISE_TIME = 1.6
-PLACE_REACH_TIME = 2.2
-PLACE_APPROACH_TIME = PLACE_RAISE_TIME + PLACE_REACH_TIME
-# 放置 IK 只跟位置（不给朝向目标），靠下面的窗口把姿态锁在携带臂姿附近：
-# 肩内外旋/肩偏摆贴住初始值 → 肘不外翻；腕三轴几乎不转。
-PLACE_ROLL_WINDOW = 0.45
-PLACE_YAW_WINDOW = 0.50
-PLACE_WRIST_WINDOW = 0.30
-PLACE_ELBOW_MIN = 0.20  # 肘不许伸直锁死
-PLACE_DESCEND_TIME = 1.2
-# 15 到位后直接松爪自由落体，不再做 Z-only IK（下降会碰灰筐沿）。
-PLACE_RELEASE_FROM_15 = True
 RELEASE_TIME = 0.8
 # 收臂：15 → 胸前 05。
 RETRACT_TIME = 1.6
 RETRACT_HOME_TIME = 1.6
 
-# 旧 FSM 垂臂种子，顺序同 RIGHT_ARM_JOINTS。
-RIGHT_ARM_READY = (0.40, -0.42, 0.18, 1.20, 0.0, 0.95, 0.0)
 ARM_SLEW_RAD = 0.080
 ARM_SLEW_RAD_LIFT = 0.012  # 夹持后慢跟，垫面不瞬移
-STOP_AFTER = "place"
 
-# 路点 JSON 按关节名匹配，不改 DDS 下标。smooth：00→10→20→30 连续速度，
-# 30→40 只作 q_ref；natural_v2 / natural_v1 仍可通过 CLI 回退。
-WAYPOINT_SET_DEFAULT = "ces_pick_smooth_v1"
+# 路点 JSON 按关节名匹配，不改 DDS 下标。00→10→20→30 连续速度，
+# 30→40 只作 q_ref；运行时只支持 Smooth V1 Baseline。
 WAYPOINT_LEAD_IN_TIME = 0.25
 WAYPOINT_LEAD_IN_TOL = 0.05
 
@@ -215,23 +166,11 @@ WALK_ARRIVE_HOLD = 0.35
 # walk 到站钉盆后只短暂冻 05。1.5 s 太长；钉盆本身已刹住摇摆。
 WALK_PLACE_HOLD_TIME = 0.45
 WALK_PLACE_TIMEOUT = 60.0
-WALK_GOTO_TIMEOUT = 20.0
 WALK_VX_ACCEL = 1.00
 WALK_VY_ACCEL = 1.00
 WALK_WZ_ACCEL = 2.00
 WALK_ABORT_TILT = 0.55
 WALK_ABORT_HOLD = 0.40
-
-
-def heading_yaw(root_quat) -> float:
-    """Heading from body +X projected on the ground (valid while pitched)."""
-    w = float(root_quat[0, 0])
-    x = float(root_quat[0, 1])
-    y = float(root_quat[0, 2])
-    z = float(root_quat[0, 3])
-    fx = 1.0 - 2.0 * (y * y + z * z)
-    fy = 2.0 * (x * y + w * z)
-    return math.atan2(fy, fx)
 
 
 def yaw_quat(yaw: float) -> tuple[float, float, float, float]:
@@ -263,7 +202,6 @@ def stand_xy(target_xy: tuple[float, float], yaw: float, x_b: float, y_b: float)
 # 抓取站在托盘左侧，右手伸进上料口。yaw=π 朝 -X（整簇已转 +180°）。
 # 机器人 spawn 就在抓取站，所以 SPAWN_* 与 PICK_* 相同，启动不瞬移。
 PICK_STAND_YAW = math.radians(ROBOT_STAND_YAW)
-PICK_TARGET_XY = (PRODUCT_POS[0], PRODUCT_POS[1])
 PICK_STAND_XY = SCENE_PICK_STAND_XY
 SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
 SPAWN_STAND_YAW = PICK_STAND_YAW
@@ -275,12 +213,6 @@ PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = PLACE_TRAY_CENTER_XY
 _PLACE_STAND_FROM_XY = (-2.0869, -0.3117)
 PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
-# 旧清单的世界 XY+Z 目标；Smooth V1 不再追这个 XY。
-PLACE_Z = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + PLACE_RELEASE_ABOVE_TABLE
-# Smooth V1 在 15 到位后只向下逼近这个世界 Z；X/Y 不锁，肩膀可带动手臂下压。
-# 若 15 已经低于该高度，状态机不会反向抬升，也不会继续向下压。
-PLACE_FINAL_TCP_Z = TABLE_TOP_Z + PLACE_FINAL_TCP_ABOVE_FLOOR
-
 # HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
 # ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
 # ② 边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
@@ -312,9 +244,3 @@ CARRY_WALK_LEGS = build_carry_route(
     backoff_trim=WALK_BACKOFF_TRIM,
     turn_lead=WALK_TURN_LEAD,
 )
-WALK_BACKOFF_XY = CARRY_WALK_LEGS[0].target_xy
-
-TABLE_REWARD_HALF_XY = (1.15, 0.40)
-DROP_HEIGHT = 0.32
-PLACE_HEIGHT_MIN = TABLE_TOP_Z + 0.01
-PLACE_HEIGHT_MAX = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.12

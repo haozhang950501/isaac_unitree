@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
 
+from tasks.common_scene.base_scene_ces_pickplace_wholebody import PRODUCT_DROP_Z
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -16,12 +18,8 @@ if TYPE_CHECKING:
 def object_dropped(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
-    drop_height: float = 0.32,
+    drop_height: float = PRODUCT_DROP_Z,
 ) -> torch.Tensor:
     """True when the Product has fallen off the tray / table onto the floor."""
     obj: RigidObject = env.scene[object_cfg.name]
     return obj.data.root_pos_w[:, 2] < drop_height
-
-
-# Back-compat alias used by older cylinder wiring.
-reset_object_estimate = object_dropped

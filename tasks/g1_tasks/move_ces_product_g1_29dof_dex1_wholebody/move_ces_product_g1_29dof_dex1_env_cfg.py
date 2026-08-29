@@ -128,7 +128,7 @@ class MoveCESProductG129Dex1WholebodyEnvCfg(ManagerBasedRLEnvCfg):
     def __post_init__(self):
         """Post initialization."""
         self.decimation = 4
-        # walk to CES → grasp → lift → walk to table → place → retract
+        # pinned pick → grasp/lift → carry-walk to table → place → retract
         self.episode_length_s = 120.0
 
         self.sim.dt = 0.005
