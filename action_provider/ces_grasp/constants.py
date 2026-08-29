@@ -11,6 +11,7 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
     PLACE_TRAY_CENTER_XY,
     PLACE_TRAY_HEIGHT,
     ROBOT_INIT_POS,
+    ROBOT_INIT_ROT,
     ROBOT_STAND_YAW,
     TABLE_TOP_Z,
 )
@@ -20,7 +21,6 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
 TCP_LOCAL = (0.0, 0.115, 0.0)
 GRIPPER_OPEN = -0.010
 GRIPPER_CLOSED = 0.019  # gap ≈ 12 mm
-STAND_PELVIS_Z = 0.755
 
 EE_BODY = "right_hand_base_link"
 RIGHT_ARM_JOINTS = [
@@ -58,10 +58,10 @@ PRODUCT_HALF_Z = 0.01275
 GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
 # 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
-# _apply_snap 每帧把骨盆写成 STAND_PELVIS_Z、速度清零，所以 is_standing()
+# root pin 每帧把骨盆写回场景初始位姿、速度清零，所以 is_standing()
 # 从第一帧就为真 —— 原来的 1.0/0.6/0.5（合计 2.1 s）纯粹是空烧。
 # 缩短的只是计时门槛，is_standing() 的判定本身没动：真站不稳仍会一直等，
-# 最坏由 _navigate 的 6 s 超时兜底。若改成非 snap 起步（机器人要自己走到
+# 最坏由 _navigate 的 6 s 超时兜底。若改成非 pin 起步（机器人要自己走到
 # 抓取站、或 spawn 时会晃），把这三个值调回 1.0/0.6/0.5。
 SETTLE_TIME = 0.3
 STAND_MIN_TIME = 0.2
@@ -108,7 +108,7 @@ def clamp_pick_speed(scale: float | None) -> float:
         return PICK_SPEED_SCALE
     return min(PICK_SPEED_MAX, max(PICK_SPEED_MIN, float(scale)))
 
-# HOLD 后的双足换站。策略命令是机体系 [vx, vy, wz, height]。
+# CARRY 后的双足换站。策略命令是机体系 [vx, vy, wz, height]。
 # 关键约束：策略对小指令不迈步（键盘点动走不动，必须长按把指令拉起来），
 # 所以平移/转向都用固定幅值 + 死区，不用比例控制。幅值参考键盘长按能走的量级。
 WALK_VX = 0.45  # 前进/后退幅值；< 0.3 基本只前后晃不迈步
@@ -173,18 +173,6 @@ WALK_ABORT_TILT = 0.55
 WALK_ABORT_HOLD = 0.40
 
 
-def yaw_quat(yaw: float) -> tuple[float, float, float, float]:
-    return (math.cos(yaw / 2.0), 0.0, 0.0, math.sin(yaw / 2.0))
-
-
-def wrap_angle(a: float) -> float:
-    while a > math.pi:
-        a -= 2.0 * math.pi
-    while a < -math.pi:
-        a += 2.0 * math.pi
-    return a
-
-
 def forward_left(yaw: float) -> tuple[tuple[float, float], tuple[float, float]]:
     """Body x = forward, body y = left, for a Z-up yaw (0 = +X)."""
     c, s = math.cos(yaw), math.sin(yaw)
@@ -200,11 +188,13 @@ def stand_xy(target_xy: tuple[float, float], yaw: float, x_b: float, y_b: float)
 
 
 # 抓取站在托盘左侧，右手伸进上料口。yaw=π 朝 -X（整簇已转 +180°）。
-# 机器人 spawn 就在抓取站，所以 SPAWN_* 与 PICK_* 相同，启动不瞬移。
+# 机器人 spawn 就在抓取站，Pick 阶段钉住完整初始骨盆位姿。
 PICK_STAND_YAW = math.radians(ROBOT_STAND_YAW)
 PICK_STAND_XY = SCENE_PICK_STAND_XY
-SPAWN_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
-SPAWN_STAND_YAW = PICK_STAND_YAW
+PICK_ROOT_PIN = (
+    tuple(float(value) for value in ROBOT_INIT_POS),
+    tuple(float(value) for value in ROBOT_INIT_ROT),
+)
 
 # 放置站面向桌子（yaw=π/2）。站位按桌心 **Y 偏移之前** 的位置算，不跟
 # 2026-08-24 的桌子 −Y 平移走，否则 15 的 +Y 伸手距离原样不变。
@@ -213,7 +203,7 @@ PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = PLACE_TRAY_CENTER_XY
 _PLACE_STAND_FROM_XY = (-2.0869, -0.3117)
 PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
-# HOLD 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
+# CARRY 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
 # ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
 # ② 边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
 # ③ 不停步，直接发 W（机体系 +vx）；转正后这就是世界 +Y，走进放置站

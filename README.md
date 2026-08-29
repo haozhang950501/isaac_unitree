@@ -225,15 +225,12 @@ python sim_main.py \
   --robot_type g129 \
   --enable_dex1_dds \
   --auto_ces_pick_place \
-  --station_mode walk \
-  --ces_use_joint_waypoints \
-  --ces_waypoint_set ces_pick_smooth_v1 \
   --ces_pick_speed 1.5
 ```
 
-The runtime now supports only the `ces_pick_smooth_v1` Baseline. The compatibility
-arguments in the command above remain accepted, but only the values shown are
-valid; omitting `--ces_use_joint_waypoints` no longer selects a Cartesian path.
+The runtime has one fixed Baseline: whole-body walk plus the
+`ces_pick_smooth_v1` trajectory. Only `--auto_ces_pick_place` and the optional
+`--ces_pick_speed` are exposed as CES-specific runtime controls.
 
 `ces_pick_smooth_v1` commands the forward joint path
 `00 -> 10 -> 20 -> 30`. Pose 40 remains a dynamic null-space reference for
@@ -245,16 +242,17 @@ moves to the newly user-authored pose 05 in front of the chest:
 `0.8 / 1.2 / 3.0` seconds, or about `0.53 / 0.80 / 2.00` seconds at the
 default `1.5` speed scale.
 
-The same Smooth V1 manifest now owns the approved Place handoff. The product
+One compact Smooth V1 runtime manifest owns all seven q values and the approved
+Pick, Return, and Place paths. The product
 stays in pose 05 while changing stations, then Unitree commands the
 user-authored joint path `05 -> 15_place_forward_release` with a 3.2-second
 segment smoothstep (about 2.13 seconds at the default 1.5 speed scale). At pose
 15 the gripper opens immediately; there is no Cartesian Place descent, tote-center
 X/Y target, orientation target, or pose 25. The arm then retracts `15 -> 05`.
 
-The return via pose 20, walk handoff, live-pelvis pin, and Place 05-to-15
-contracts are covered by CPU/static tests. These checks do not claim Isaac Sim
-physics results.
+The return via pose 20, first-frame reverse walk, live-pelvis root pin, and
+Place 05-to-15 contracts were checked locally before the temporary CPU tests
+were removed. This does not claim an Isaac Sim physics result.
 
 #### 2.4.3 Data Replay
 

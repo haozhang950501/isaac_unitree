@@ -1,7 +1,6 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "ces_pick_smooth_v1",
-  "runtime_ready": true,
   "joint_order": [
     "right_shoulder_pitch_joint",
     "right_shoulder_roll_joint",
@@ -11,209 +10,45 @@
     "right_wrist_pitch_joint",
     "right_wrist_yaw_joint"
   ],
-  "pose_files": [
-    "00_ready.json",
-    "10_forward_lift_retract.json",
-    "20_right_shift_wrist_down.json",
-    "30_pre_grasp_vertical.json",
-    "40_grasp_posture_ref.json",
-    "05_chest_carry.json",
-    "15_place_forward_release.json"
-  ],
-  "preview_pose_files": [
-    "00_ready.json",
-    "10_forward_lift_retract.json",
-    "20_right_shift_wrist_down.json",
-    "30_pre_grasp_vertical.json"
-  ],
-  "preview_through": "30_pre_grasp_vertical",
-  "segments": [
-    {
-      "from": "00_ready",
-      "to": "10_forward_lift_retract",
-      "duration_s": 1.75,
-      "preview_control": "continuous_monotone_cubic",
-      "future_project_control": "joint_space"
-    },
-    {
-      "from": "10_forward_lift_retract",
-      "to": "20_right_shift_wrist_down",
-      "duration_s": 2.07,
-      "preview_control": "continuous_monotone_cubic",
-      "future_project_control": "joint_space"
-    },
-    {
-      "from": "20_right_shift_wrist_down",
-      "to": "30_pre_grasp_vertical",
-      "duration_s": 1.2,
-      "preview_control": "continuous_monotone_cubic",
-      "future_project_control": "joint_space"
-    },
-    {
-      "from": "30_pre_grasp_vertical",
-      "to": "40_grasp_posture_ref",
-      "duration_s": 1.2,
-      "preview_control": "q_ref_only_not_commanded",
-      "future_project_control": "cartesian_vertical_ik_with_dynamic_q_ref"
-    }
-  ],
-  "preview_rate_hz": 50.0,
-  "interpolation": {
-    "method": "monotone_cubic_hermite",
-    "continuous_velocity": true,
-    "stop_at_intermediate_waypoints": false,
-    "endpoint_velocity_zero": true,
-    "shape_preserving": true
+  "poses": {
+    "00_ready": [0.35, -0.18, 0.0, 0.87, 0.0, 0.0, 0.0],
+    "10_forward_lift_retract": [-0.7, -0.22, 0.38, 0.75, 0.32, -0.05, 0.55],
+    "20_right_shift_wrist_down": [-1.2829, -1.459, 1.3923, 0.5512, 0.725, -0.123, 0.8197],
+    "30_pre_grasp_vertical": [-1.4213965, -1.2544835, 1.6117437, 1.031472, 0.28874475, -0.07691543, 1.4658002],
+    "40_grasp_posture_ref": [-1.1486928, -0.9084404, 1.4343923, 1.6014145, 0.28874475, -0.07691543, 1.4658002],
+    "05_chest_carry": [-0.04000009, -0.34000003, 0.52000004, -0.7499997, -0.34, -0.09, 0.90999967],
+    "15_place_forward_release": [-1.2266918, -0.2318979, 1.4931674, 1.2198853, -0.042756237, 0.005500171, 1.1593101]
   },
-  "future_project_handoff": {
-    "joint_space_through": "30_pre_grasp_vertical",
-    "cartesian_descent_target": "project Dex1 TCP grasp target",
-    "dynamic_q_ref_from": "30_pre_grasp_vertical",
-    "dynamic_q_ref_to": "40_grasp_posture_ref",
-    "q_ref_active_joint_subset": [
-      "right_shoulder_pitch_joint",
-      "right_shoulder_roll_joint",
-      "right_shoulder_yaw_joint",
-      "right_elbow_joint"
+  "forward_path": {
+    "waypoints": [
+      "00_ready",
+      "10_forward_lift_retract",
+      "20_right_shift_wrist_down",
+      "30_pre_grasp_vertical"
     ],
-    "q_ref_wrist_policy": "copy_from_30_exactly"
+    "durations_s": [1.75, 2.07, 1.2],
+    "interpolation": "monotone_cubic_hermite"
+  },
+  "q_ref": {
+    "from": "30_pre_grasp_vertical",
+    "to": "40_grasp_posture_ref"
   },
   "return_path": {
-    "logical_waypoints": [
+    "waypoints": [
       "40_grasp_posture_ref",
       "30_pre_grasp_vertical",
       "20_right_shift_wrist_down",
       "05_chest_carry"
     ],
-    "commanded_waypoints": [
-      "30_pre_grasp_vertical",
-      "20_right_shift_wrist_down",
-      "05_chest_carry"
-    ],
-    "start_policy": "use_live_post_lift_q_as_40_phase; never hard-command authored q_ref pose 40",
-    "segments": [
-      {
-        "from": "40_grasp_posture_ref",
-        "to": "30_pre_grasp_vertical",
-        "duration_s": 0.8,
-        "runtime_control": "live_joint_space_lead_in"
-      },
-      {
-        "from": "30_pre_grasp_vertical",
-        "to": "20_right_shift_wrist_down",
-        "duration_s": 1.2,
-        "runtime_control": "joint_space_drawer_clearance"
-      },
-      {
-        "from": "20_right_shift_wrist_down",
-        "to": "05_chest_carry",
-        "duration_s": 3.0,
-        "runtime_control": "joint_space_to_carry"
-      }
-    ],
-    "interpolation": "monotone_cubic_hermite",
-    "final_role": "carry_posture"
+    "durations_s": [0.8, 1.2, 3.0],
+    "interpolation": "monotone_cubic_hermite"
   },
   "place_path": {
-    "logical_waypoints": [
+    "waypoints": [
       "05_chest_carry",
       "15_place_forward_release"
     ],
-    "commanded_waypoints": [
-      "15_place_forward_release"
-    ],
-    "start_policy": "use live carry q at the approved 05 posture; do not replace it with the old pre-place raise constant",
-    "segments": [
-      {
-        "from": "05_chest_carry",
-        "to": "15_place_forward_release",
-        "duration_s": 3.2,
-        "runtime_control": "joint_space"
-      }
-    ],
-    "interpolation": "segment_smoothstep",
-    "final_role": "release_posture_at_pose_15"
-  },
-  "planning": {
-    "removed_as_redundant": [
-      "05_forward_reach",
-      "25_pre_grasp_xy_aligned"
-    ],
-    "target_max_waypoint_delta_rate_rad_s": 0.6,
-    "minimum_segment_duration_s": 1.2,
-    "waypoint_q_values_preserved": true
-  },
-  "viewer": {
-    "urdf": "urdf_pose_toolkit/xr_teleoperate/assets/g1/g1_body29_hand14.urdf",
-    "ik_end": "right_hand_palm_joint"
-  },
-  "validation": {
-    "validation_passed": true,
-    "violations": [],
-    "interpolation": "monotone_cubic_hermite",
-    "continuous_velocity": true,
-    "endpoint_velocity_zero": true,
-    "intermediate_full_stop": false,
-    "interior_speed_norm_rad_s": [
-      0.563947888,
-      0.373612158
-    ],
-    "forward_max_abs_velocity_rad_s": 0.88722353,
-    "return_path": {
-      "validation_passed": true,
-      "violations": [],
-      "commanded_waypoints": [
-        "30_pre_grasp_vertical",
-        "20_right_shift_wrist_down",
-        "05_chest_carry"
-      ],
-      "interior_speed_norm_rad_s": [
-        0.594605823
-      ],
-      "pose_20_is_drawer_clearance_waypoint": true,
-      "via_20_to_05": true,
-      "interpolation": "monotone_cubic_hermite",
-      "max_abs_velocity_by_joint_rad_s": [
-        0.234815438,
-        0.5995,
-        0.364469901,
-        0.551692784,
-        0.545319062,
-        0.057605712,
-        0.733543361
-      ],
-      "max_abs_velocity_rad_s": 0.733543361,
-      "default_speed_scale": 1.5,
-      "authored_30_to_20_to_05_duration_s": 4.2,
-      "default_30_to_20_to_05_runtime_duration_s": 2.8,
-      "default_scaled_max_abs_velocity_rad_s": 1.100315041
-    },
-    "place_path": {
-      "validation_passed": true,
-      "violations": [],
-      "commanded_waypoints": [
-        "15_place_forward_release"
-      ],
-      "pose_05_is_exact_carry_start": true,
-      "pose_25_removed": true,
-      "joint_interpolation": "segment_smoothstep",
-      "authored_05_to_15_duration_s": 3.2,
-      "max_abs_joint_delta_rad": 1.44988536,
-      "min_joint_limit_margin_rad": 0.535119358,
-      "release_policy": "open_gripper_at_pose_15",
-      "final_cartesian_control": null
-    },
-    "max_abs_velocity_by_joint_rad_s": [
-      0.818569837,
-      0.88722353,
-      0.595537955,
-      0.60034,
-      0.545319062,
-      0.057605712,
-      0.756958979
-    ],
-    "max_abs_velocity_rad_s": 0.88722353,
-    "min_joint_limit_margin_rad": 0.148629358
-  },
-  "generated_at": "2026-08-24T14:10:50+08:00"
+    "durations_s": [3.2],
+    "interpolation": "segment_smoothstep"
+  }
 }

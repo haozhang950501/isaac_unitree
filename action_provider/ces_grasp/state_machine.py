@@ -8,9 +8,7 @@ The only supported runtime path is:
 """
 from __future__ import annotations
 
-import math
-
-import torch
+import logging
 
 from action_provider.ces_grasp import constants as C
 from action_provider.ces_grasp.fsm_pick import CesPickMixin, top_down_grasp_quat
@@ -18,8 +16,11 @@ from action_provider.ces_grasp.fsm_place import CesPlaceMixin
 from action_provider.ces_grasp.fsm_types import CesCommand, CesPickPlacePhase
 from action_provider.ces_grasp.fsm_walk import CesWalkMixin
 from action_provider.ces_grasp.pose_library import CesTrajectory, load_baseline_trajectory
-from action_provider.manip_common import CartesianInterpolator, JointSpaceInterpolator
-from action_provider.manip_common.interpolation import scale_segment_times
+from action_provider.ces_grasp.interpolation import (
+    CartesianInterpolator,
+    JointSpaceInterpolator,
+    scale_segment_times,
+)
 
 __all__ = [
     "CesCommand",
@@ -27,6 +28,8 @@ __all__ = [
     "CesPickPlaceStateMachine",
     "top_down_grasp_quat",
 ]
+
+logger = logging.getLogger("ces")
 
 
 class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
@@ -80,44 +83,9 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         self._lift_time = self._scaled([C.LIFT_TIME], C.PICK_SEGMENT_MIN_TIME)[0]
 
         self._planner = None
-        self.phase = CesPickPlacePhase.SETTLE
-        self.t = 0.0
-        self.hold = 0.0
-        self._log_t = 0.0
-        self._walk = [0.0, 0.0, 0.0, 0.8]
-        self.gripper = C.GRIPPER_OPEN
-        self._grasp_pos_w = None
-        self._grasp_quat_w = None
-        self._grasp_arm_q = None
-        self._carry_arm_q = None
-        self._place_arm_q = None
-        self._q_wp30 = None
-        self._q_wp40 = None
-        self._wp_arrive_names: list[str] = []
-        self._wp_logged = 0
-        self._verify_descend_xy = None
-        self._logged_q_ref_once = False
-        self._return_followup_qs: list[torch.Tensor] = []
-        self._return_followup_durations: list[float] = []
-        self._return_followup_method = self._trajectory.return_interpolation_method
-        self._return_total_time = 0.0
-        self._place_joint_total_time = 0.0
-        self._dbg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        self._walk_mode = "idle"
-        self._walk_leg = 0
-        self._turn_pinned_logged = False
-        self._stopped_logged = False
-        self._table_braked = False
-        self._walk_unstable_t = 0.0
-        self._place_lock_xy = None
-        self._place_lock_yaw = None
-        self._place_lock_z = None
-        self._place_lock_quat = None
-        self._place_hold_obj_z0 = None
-        self._carry_drop_logged = False
-        self._step_err_t = -10.0
+        self._reset_runtime()
 
-        print(
+        logger.info(
             f"[ces_fsm] Baseline Smooth V1 walk-place "
             f"pick_stand=({C.PICK_STAND_XY[0]:.3f},{C.PICK_STAND_XY[1]:.3f}) "
             f"place_stand=({C.PLACE_STAND_XY[0]:.3f},{C.PLACE_STAND_XY[1]:.3f}) "
@@ -135,10 +103,12 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         return scale_segment_times(durations, self.speed_scale, min_time)
 
     def reset(self):
+        self._reset_runtime()
+
+    def _reset_runtime(self):
         self.phase = CesPickPlacePhase.SETTLE
         self.t = 0.0
         self.hold = 0.0
-        self._log_t = 0.0
         self.gripper = C.GRIPPER_OPEN
         self._walk = [0.0, 0.0, 0.0, 0.8]
         self._grasp_pos_w = None
@@ -148,16 +118,12 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         self._place_arm_q = None
         self._q_wp30 = None
         self._q_wp40 = None
-        self._wp_arrive_names = []
-        self._wp_logged = 0
-        self._verify_descend_xy = None
-        self._logged_q_ref_once = False
         self._return_followup_qs = []
         self._return_followup_durations = []
+        self._return_followup_method = self._trajectory.return_interpolation_method
         self._return_total_time = 0.0
         self._place_joint_total_time = 0.0
         self.joint_interp.clear()
-        self._dbg = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._walk_mode = "idle"
         self._walk_leg = 0
         if self._planner is not None:
@@ -166,16 +132,13 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         self._stopped_logged = False
         self._table_braked = False
         self._walk_unstable_t = 0.0
-        self._place_lock_xy = None
-        self._place_lock_yaw = None
-        self._place_lock_z = None
-        self._place_lock_quat = None
+        self._place_lock_pose = None
         self._place_hold_obj_z0 = None
         self._carry_drop_logged = False
         self._step_err_t = -10.0
 
     def _transition(self, phase: CesPickPlacePhase):
-        print(f"[ces_fsm] {self.phase.value} -> {phase.value}  t={self.t:.2f}s")
+        logger.info("[ces_fsm] %s -> %s t=%.2fs", self.phase.value, phase.value, self.t)
         self.phase = phase
         self.t = 0.0
         self.hold = 0.0
@@ -191,41 +154,29 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         tcp=None,
         quat=None,
         *,
-        snap=False,
-        snap_xy=None,
-        snap_yaw=None,
-        snap_z=None,
-        snap_quat=None,
-        guide=False,
-        done=False,
-        failed=False,
+        walk=None,
+        root_pin=None,
         arm_q=None,
         arm_q_ref=None,
     ) -> CesCommand:
-        if not snap and not guide and self.phase in (
+        if walk is None and root_pin is None and self.phase in (
+            CesPickPlacePhase.SETTLE,
+            CesPickPlacePhase.GOTO_PICK,
             CesPickPlacePhase.UNFOLD,
             CesPickPlacePhase.DESCEND,
             CesPickPlacePhase.GRASP,
             CesPickPlacePhase.LIFT,
             CesPickPlacePhase.RETURN_HOME,
         ):
-            snap = True
-            snap_xy = C.PICK_STAND_XY
-            snap_yaw = C.PICK_STAND_YAW
+            root_pin = C.PICK_ROOT_PIN
         return CesCommand(
+            gripper=C.GRIPPER_CLOSED if self._squeezing() else self.gripper,
+            walk=None if walk is None else tuple(float(value) for value in walk),
+            root_pin=root_pin,
+            arm_q=arm_q,
             tcp_pos=tcp,
             tcp_quat=quat,
-            gripper=C.GRIPPER_CLOSED if self._squeezing() else self.gripper,
-            walk=list(self._walk),
-            snap_xy=snap_xy if snap else None,
-            snap_yaw=snap_yaw if snap else None,
-            guide=bool(guide),
-            done=done,
-            failed=failed,
-            arm_q=arm_q,
             arm_q_ref=arm_q_ref,
-            snap_z=snap_z if snap else None,
-            snap_quat=snap_quat if snap else None,
         )
 
     def _squeezing(self) -> bool:
@@ -240,50 +191,6 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
             CesPickPlacePhase.PLACE_APPROACH,
         )
 
-    def _fmt_q(self, q: torch.Tensor) -> str:
-        return "[" + ", ".join(f"{float(v):+.3f}" for v in q.reshape(-1)[:7]) + "]"
-
-    def _maybe_log(self):
-        self._log_t += self.ctx.dt
-        interval = 0.25 if self.phase in (
-            CesPickPlacePhase.GOTO_PICK,
-            CesPickPlacePhase.GOTO_PLACE,
-            CesPickPlacePhase.PLACE_HOLD,
-            CesPickPlacePhase.PLACE_APPROACH,
-        ) else 1.0
-        if self._log_t < interval:
-            return
-        self._log_t = 0.0
-        tcp_err = -1.0
-        if self._grasp_pos_w is not None and self.phase in (
-            CesPickPlacePhase.DESCEND,
-            CesPickPlacePhase.GRASP,
-            CesPickPlacePhase.LIFT,
-        ):
-            tcp_err = self.ctx.ik.position_error_norm(self._grasp_pos_w)
-        extra = ""
-        if self.phase is CesPickPlacePhase.GOTO_PLACE and self._walk_mode != "idle":
-            x, y, remaining, yaw, lateral, _unused, yaw_err = self._dbg
-            z = float(self.ctx.get_base_pose_w()[0][0, 2])
-            extra = (
-                f"leg={self._walk_leg} mode={self._walk_mode} "
-                f"cmd_b=({self._walk[0]:+.2f},{self._walk[1]:+.2f},{self._walk[2]:+.2f}) "
-                f"xy=({x:.2f},{y:.2f}) rem={remaining:+.2f} lat={lateral:+.2f} "
-                f"head={math.degrees(yaw):.0f} err={math.degrees(yaw_err):+.0f}deg "
-                f"z={z:.3f}"
-            )
-        if self.phase in (
-            CesPickPlacePhase.PLACE_HOLD,
-            CesPickPlacePhase.PLACE_APPROACH,
-        ):
-            extra = f"{self._carry_contact_line()} {extra}".strip()
-        print(
-            f"[ces_fsm] {self.phase.value} t={self.t:.1f}s "
-            f"grip={self.gripper:.3f} tcp_err={tcp_err*1000:.1f}mm "
-            f"tilt={self.ctx.stance_tilt():.2f} "
-            f"standing={int(self.ctx.is_standing())} {extra}"
-        )
-
     def step(self) -> CesCommand:
         self.t += self.ctx.dt
         self._walk = [0.0, 0.0, 0.0, 0.8]
@@ -293,14 +200,21 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         except Exception as exc:
             if self.t - self._step_err_t > 2.0:
                 self._step_err_t = self.t
-                print(f"[ces_fsm] {self.phase.value} step error t={self.t:.2f}s: {exc}")
-                import traceback
-
-                traceback.print_exc()
+                logger.exception(
+                    "[ces_fsm] %s step error t=%.2fs: %s",
+                    self.phase.value,
+                    self.t,
+                    exc,
+                )
+            safe_walk = (
+                (0.0, 0.0, 0.0, 0.8)
+                if self.phase in (CesPickPlacePhase.GOTO_PLACE, CesPickPlacePhase.FAILED)
+                and self._carry_arm_q is not None
+                else None
+            )
             return self._cmd(
                 tcp=self._grasp_pos_w,
                 quat=self._grasp_quat_w,
+                walk=safe_walk,
                 arm_q=getattr(self.ctx, "_q_right", None),
             )
-        finally:
-            self._maybe_log()

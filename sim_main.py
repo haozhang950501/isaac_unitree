@@ -98,32 +98,6 @@ parser.add_argument(
     help="autonomous CES LoadingLine Product pick-and-place (right Dex1)",
 )
 parser.add_argument(
-    "--station_mode",
-    type=str,
-    default="walk",
-    choices=["walk"],
-    help="CES Baseline compatibility option; only walk is supported",
-)
-parser.add_argument(
-    "--ces_stop_after",
-    type=str,
-    default="place",
-    choices=["place"],
-    help="CES Baseline compatibility option; only the complete place task is supported",
-)
-parser.add_argument(
-    "--ces_use_joint_waypoints",
-    action="store_true",
-    help="CES Baseline compatibility flag; joint waypoints are always enabled",
-)
-parser.add_argument(
-    "--ces_waypoint_set",
-    type=str,
-    default="ces_pick_smooth_v1",
-    choices=["ces_pick_smooth_v1"],
-    help="CES Baseline compatibility option; only ces_pick_smooth_v1 is supported",
-)
-parser.add_argument(
     "--ces_pick_speed",
     type=float,
     default=1.5,

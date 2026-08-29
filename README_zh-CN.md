@@ -218,15 +218,12 @@ python sim_main.py \
   --robot_type g129 \
   --enable_dex1_dds \
   --auto_ces_pick_place \
-  --station_mode walk \
-  --ces_use_joint_waypoints \
-  --ces_waypoint_set ces_pick_smooth_v1 \
   --ces_pick_speed 1.5
 ```
 
-运行时现在只支持 `ces_pick_smooth_v1` Baseline。上面命令中的兼容参数仍可
-保留，但只能使用示例中的值；不写 `--ces_use_joint_waypoints` 也不会再切换到
-笛卡尔旧路径。
+运行时只有一条固定 Baseline：whole-body walk 加 `ces_pick_smooth_v1` 轨迹。
+CES 专用启动参数只保留 `--auto_ces_pick_place` 和可选的
+`--ces_pick_speed`。
 
 `ces_pick_smooth_v1` 正向硬下发 `00 → 10 → 20 → 30`。40 仍然只作为
 笛卡尔下降 IK 的动态零空间参考，不会作为手臂姿态硬下发。抬起产品后，以实时
@@ -235,14 +232,15 @@ python sim_main.py \
 `0.8 / 1.2 / 3.0` 秒，默认 `--ces_pick_speed 1.5` 下约为
 `0.53 / 0.80 / 2.00` 秒。
 
-同一个 Smooth V1 清单现在也包含已确认的 Place 交接：换站时保持胸前 05，
+一个精简的 Smooth V1 运行清单统一保存全部七组 q 和 Pick/Return/Place 路径。
+换站时保持胸前 05，
 到放置站后由 Unitree 关节插补执行人工姿态 `05 → 15_place_forward_release`。
 原始时长 `3.2 s`，默认 `--ces_pick_speed 1.5` 下约 `2.13 s`，每段使用
 smoothstep 起止停稳。15 到位后立即松爪，不再执行笛卡尔下降、灰筐中心 X/Y
 目标或朝向目标，运行路径中也没有 25；随后按 `15→05` 收臂。
 
-经 20 回收、第一帧反向 walk、实际骨盆钉住和 Place `05→15` 合约已经覆盖
-CPU/静态测试；这些检查不代表 Isaac Sim 物理结果。
+经 20 回收、第一帧反向 walk、实际骨盆 `root_pin` 和 Place `05→15` 合约，
+已在删除临时 CPU 测试前完成本地检查；这些检查不代表 Isaac Sim 物理结果。
 
 #### 2.4.3 数据回放
 

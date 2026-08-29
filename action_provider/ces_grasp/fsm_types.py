@@ -7,6 +7,12 @@ import enum
 from dataclasses import dataclass
 from typing import Any
 
+RootPose = tuple[
+    tuple[float, float, float],
+    tuple[float, float, float, float],
+]
+WalkCommand = tuple[float, float, float, float]
+
 
 class CesPickPlacePhase(enum.Enum):
     SETTLE = "settle"
@@ -26,8 +32,7 @@ class CesPickPlacePhase(enum.Enum):
     FAILED = "failed"
 
 
-# The nominal success path is data as well as documentation.  CPU tests can
-# protect it on machines that do not have torch or Isaac Lab installed.
+# Keep the nominal success path as data as well as documentation.
 BASELINE_PHASE_ORDER = (
     CesPickPlacePhase.SETTLE,
     CesPickPlacePhase.GOTO_PICK,
@@ -48,16 +53,10 @@ BASELINE_PHASE_ORDER = (
 
 @dataclass
 class CesCommand:
-    tcp_pos: Any | None
-    tcp_quat: Any | None
     gripper: float
-    walk: list[float]
-    snap_xy: tuple[float, float] | None
-    snap_yaw: float | None
-    guide: bool
-    done: bool
-    failed: bool
-    arm_q: Any | None
+    walk: WalkCommand | None = None
+    root_pin: RootPose | None = None
+    arm_q: Any | None = None
+    tcp_pos: Any | None = None
+    tcp_quat: Any | None = None
     arm_q_ref: Any | None = None
-    snap_z: float | None = None
-    snap_quat: tuple[float, float, float, float] | None = None

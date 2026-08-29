@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-24，CES `Baseline_done` 代码已完成单主线精简与模块化。
+更新时间：2026-08-29，CES `Baseline_done` 已完成单主线深度精简。
 
 ## 1. 当前任务
 
@@ -31,20 +31,11 @@ python sim_main.py \
   --robot_type g129 \
   --enable_dex1_dds \
   --auto_ces_pick_place \
-  --station_mode walk \
   --manual_sim_control \
-  --ces_use_joint_waypoints \
-  --ces_waypoint_set ces_pick_smooth_v1 \
   --ces_pick_speed 1.5
 ```
 
-兼容参数仍可保留在旧脚本中，但只接受 Baseline 值：
-
-- `--station_mode walk`
-- `--ces_stop_after place`
-- `--ces_waypoint_set ces_pick_smooth_v1`
-- `--ces_use_joint_waypoints` 可写可不写，运行时始终启用关节路点
-
+CES 专用参数只保留 `--auto_ces_pick_place` 和 `--ces_pick_speed`。
 `--ces_pick_speed` 默认 1.5，限制在 `[0.25, 3.0]`。它只缩放 UNFOLD、LIFT、RETURN_HOME 和清单 Place 关节段的时间，不改路点 q 或曲线形状。DESCEND 和 GRASP 不缩放。
 
 手动控制：`回车/s` 开始，`p` 暂停，`r` 重置，`q` 退出。代码不会热更新，修改后需要重启仿真。
@@ -67,7 +58,8 @@ python sim_main.py \
 
 ### Place
 
-- 到站后钉住实际到达的骨盆 XY/Z 和完整四元数，手臂/夹爪保持 PD，不运行步态。
+- Pick 使用场景初始骨盆位姿；到站后捕获并钉住实际骨盆 XYZ 和完整四元数，手臂/夹爪保持 PD，不运行步态。
+- Walk→Pin 只在交接帧把产品速度刹停一次，不修改产品位姿。
 - `PLACE_HOLD` 固定 0.45 s，然后走清单关节段 `05→15`。
 - 15 到位立即松爪；没有 Z-only IK、笛卡尔 XY 目标或 pose 25。
 - 松爪 0.8 s 后按 `15→05` 收臂，收臂总时长 3.2 s。
@@ -79,7 +71,7 @@ python sim_main.py \
 15 = [-1.2266918, -0.2318979, 1.4931674, 1.2198853, -0.042756237, 0.005500171, 1.1593101]
 ```
 
-最终 q 由人工姿态文件管理，不应为代码整理而改动。
+最终 q 由单一运行清单管理，不应为代码整理而改动。
 
 ## 4. Walk 约束
 
@@ -93,7 +85,7 @@ python sim_main.py \
 ## 5. 场景与物理
 
 - 机器人 spawn 在抓取站：约 `(-3.187, -1.330, 0.8)`，yaw=π。
-- Pick 控制时骨盆钉在 `STAND_PELVIS_Z=0.755`。
+- Pick 控制时骨盆钉在场景 `ROBOT_INIT_POS/ROBOT_INIT_ROT`，不再另设站位高度缓存。
 - 桌面 `TABLE_TOP_EXTRA_Z=0.020`，桌面约 0.6373 m。
 - 产品质量 0.25 kg。
 - 摩擦：Dex1 pads `12/10`，Product `0.8/0.6`，LoadingLine tray `0.15/0.10`。
@@ -112,31 +104,24 @@ action_provider/ces_grasp/
 ├── fsm_walk.py        # Carry walk / keep-out / live pelvis pin
 ├── fsm_place.py       # Place hold / 05→15 / Release / 15→05
 ├── navigation.py      # 机体系分段步行规划
-├── pose_library.py    # 仅加载 Smooth V1
+├── interpolation.py   # torch.lerp / bisect / Hermite / Isaac Lab slerp
+├── ik_solver.py       # CES 专用 DLS IK 和动态 q_ref 零空间控制
+├── pose_library.py    # 校验并加载单一 Smooth V1 运行清单
 ├── constants.py       # Baseline 参数
-└── poses/ces_pick_smooth_v1/
+└── poses/ces_pick_smooth_v1/trajectory_manifest.json
 ```
 
-已删除：笛卡尔 Pick/Place、snap 换站、`stop_after=lift`、V1/V2 回退、Z-only Place、无效场景改色和未引用函数。
+已删除：笛卡尔 Pick/Place、换站瞬移与产品搬运、旧兼容参数、通用 `manip_common` 抽象、V1/V2 回退、Z-only Place、无效场景改色和未引用函数。
 
 ## 7. 本地代码检查
 
-当前无 torch/Isaac Lab 的 Windows 环境只执行 CPU/static 检查：
-
-```bash
-python -m unittest \
-  tools.test_ces_smooth_pick \
-  tools.test_ces_walk_navigation \
-  tools.test_ces_state_machine
-```
-
-检查覆盖：
+临时 CPU 回归代码已在全部通过后按计划删除。删除前检查覆盖：
 
 - Smooth V1 清单、实际 05/15 q、插值连续性和速度缩放
 - 40 只能通过 `arm_q_ref` 下发
 - `40(live)→30→20→05` 返回路径
 - 第一帧反向 walk、路线规划、停止线和 keep-out
-- 实际骨盆位姿钉住、15 松爪、无 PLACE_DESCEND
-- Python 语法、JSON 解析和旧分支残留搜索
+- 实际骨盆位姿钉住、15 松爪、无旧版笛卡尔下降阶段
+- Python 语法、JSON 解析、模块导入和旧分支残留搜索
 
 这些检查不是 Isaac Sim / 阿里云物理验收，不据此声称抓取、摩擦、平衡或放置物理结果。
