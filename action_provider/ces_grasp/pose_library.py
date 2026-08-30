@@ -1,6 +1,11 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""Load the single CES Baseline runtime trajectory manifest."""
+"""加载并严格校验唯一的 CES Baseline 运行轨迹清单。
+
+清单集中保存七组人工关节姿态、三条路径、各段时长和插值方法。
+加载器只接受 Smooth V1 schema 2，防止旧 V1/V2 回退或失效 Place 配置
+重新进入运行路径。JSON 中所有 q 和时长均按原值读取，不在代码中改写。
+"""
 from __future__ import annotations
 
 import json
@@ -18,11 +23,12 @@ _METHODS = {"segment_smoothstep", "monotone_cubic_hermite"}
 
 @dataclass(frozen=True)
 class CesTrajectory:
+    """校验完成后供状态机只读使用的 Smooth V1 轨迹数据。"""
+
     name: str
     q_by_name: dict[str, tuple[float, ...]]
     joint_waypoints: tuple[str, ...]
     joint_segment_durations: tuple[float, ...]
-    q_ref_from: str
     q_ref_to: str
     return_start: str
     return_waypoints: tuple[str, ...]
@@ -36,6 +42,7 @@ class CesTrajectory:
 
 
 def _path(data: dict, name: str) -> tuple[tuple[str, ...], tuple[float, ...], str]:
+    """读取一条路径，并验证路点、段时长及插值方法数量匹配。"""
     spec = data.get(name)
     if not isinstance(spec, dict):
         raise ValueError(f"CES manifest is missing {name}")
@@ -52,7 +59,7 @@ def _path(data: dict, name: str) -> tuple[tuple[str, ...], tuple[float, ...], st
 
 
 def load_baseline_trajectory() -> CesTrajectory:
-    """Load and validate the fixed Smooth V1 pick/return/place contract."""
+    """加载固定 Smooth V1，并验证 Pick、动态 q_ref、Return、Place 契约。"""
     data = json.loads(_MANIFEST.read_text(encoding="utf-8"))
     if data.get("schema_version") != 2 or data.get("name") != _NAME:
         raise ValueError("CES Baseline manifest schema/name mismatch")
@@ -90,7 +97,6 @@ def load_baseline_trajectory() -> CesTrajectory:
         q_by_name=q_by_name,
         joint_waypoints=forward,
         joint_segment_durations=forward_times,
-        q_ref_from=q_ref_from,
         q_ref_to=q_ref_to,
         return_start=return_path[0],
         return_waypoints=return_path[1:],

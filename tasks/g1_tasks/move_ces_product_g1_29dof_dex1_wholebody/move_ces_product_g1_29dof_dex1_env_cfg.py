@@ -1,7 +1,11 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""G1 29-DoF + Dex1 whole-body environment: pick Product off the CES LoadingLine
-tray with the right arm and place it on the adjacent packing table."""
+"""G1 29DoF + Dex1 CES Wholebody 环境配置。
+
+机器人使用右臂从 LoadingLine 托盘抓取 Product，持物行走到相邻包装桌，
+再把产品释放到灰筐。该文件只配置 Isaac Lab 场景、MDP 和仿真参数，
+实际动作顺序由 ``action_provider/ces_grasp`` 状态机负责。
+"""
 import torch
 
 import isaaclab.envs.mdp as base_mdp
@@ -28,15 +32,15 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (  # isort: sk
 )
 
 ##
-# Scene definition
+# 场景定义
 ##
 
 
 @configclass
 class ObjectTableSceneCfg(TableCESSceneCfgWH):
-    """Adds the robot, cameras and contact sensors to the CES product scene."""
+    """在 CES 基础场景上增加 G1、四路相机和全身接触传感器。"""
 
-    # Compact cluster, facing -X toward CES after the +180° world yaw.
+    # 机器人直接生成在抓取站；场景整体旋转后朝世界 -X 面向 CES。
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_dex1_wholebody(
         init_pos=ROBOT_INIT_POS,
         init_rot=ROBOT_INIT_ROT,
@@ -53,13 +57,13 @@ class ObjectTableSceneCfg(TableCESSceneCfgWH):
 
 
 ##
-# MDP settings
+# MDP 配置
 ##
 
 
 @configclass
 class ActionsCfg:
-    """Direct joint position control over the whole articulation."""
+    """对整台机器人使用带默认偏置的直接关节位置控制。"""
 
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=True
@@ -68,13 +72,17 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
+    """策略观测分组；保持原项目三类观测独立返回，不拼接 Tensor。"""
+
     @configclass
     class PolicyCfg(ObsGroup):
+        """G1 关节、Dex1 夹爪与相机图像组成的策略观测组。"""
         robot_joint_state = ObsTerm(func=mdp.get_robot_boy_joint_states)
         robot_gipper_state = ObsTerm(func=mdp.get_robot_gipper_joint_states)
         camera_image = ObsTerm(func=mdp.get_camera_image)
 
-        def __post_init__(self):
+        def __post_init__(self) -> None:
+            """关闭观测扰动，并保留各观测项原有结构。"""
             self.enable_corruption = False
             self.concatenate_terms = False
 
@@ -83,19 +91,20 @@ class ObservationsCfg:
 
 @configclass
 class TerminationsCfg:
-    """Episode ends if Product falls onto the warehouse floor."""
+    """Product 掉到仓库地面附近时结束 episode。"""
 
     object_dropped = DoneTerm(func=mdp.object_dropped)
 
 
 @configclass
 class RewardsCfg:
+    """使用 CES 离散放置/掉落奖励，权重保持 1.0。"""
     reward = RewTerm(func=mdp.compute_reward, weight=1.0)
 
 
 @configclass
 class EventCfg:
-    """Startup: seat tote and grasp physics. Reset: restore robot + Product."""
+    """启动时整理场景物理，reset 时恢复机器人和 Product 默认状态。"""
 
     ces_scene_startup = EventTerm(
         func=ces_scene_startup,
@@ -109,7 +118,7 @@ class EventCfg:
 
 @configclass
 class MoveCESProductG129Dex1WholebodyEnvCfg(ManagerBasedRLEnvCfg):
-    """Environment configuration for the CES LoadingLine Product pick-and-place task."""
+    """CES LoadingLine Product 取放任务的完整 Isaac Lab 环境配置。"""
 
     scene: ObjectTableSceneCfg = ObjectTableSceneCfg(
         num_envs=1,
@@ -125,10 +134,10 @@ class MoveCESProductG129Dex1WholebodyEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     curriculum = None
 
-    def __post_init__(self):
-        """Post initialization."""
+    def __post_init__(self) -> None:
+        """写入控制频率、PhysX、地面摩擦和手动 reset 事件。"""
         self.decimation = 4
-        # pinned pick → grasp/lift → carry-walk to table → place → retract
+        # 120 秒覆盖钉盆抓取、抬起、持物换站、放置和收臂的完整最坏时长。
         self.episode_length_s = 120.0
 
         self.sim.dt = 0.005
@@ -139,9 +148,8 @@ class MoveCESProductG129Dex1WholebodyEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
         self.sim.physx.friction_correlation_distance = 0.00625
 
-        # Same floor friction as Move-Cylinder wholebody.  Product grasp friction
-        # is set on the part itself in ces_scene_startup — do not make the floor sticky
-        # or the gait plants a foot and pitches over backwards.
+        # 地面摩擦与 Move-Cylinder Wholebody 相同。产品抓取摩擦由启动事件
+        # 单独写入；不能把地面调得过粘，否则落脚会被钉住并向后倾倒。
         self.sim.physics_material.static_friction = 1.0
         self.sim.physics_material.dynamic_friction = 1.0
         self.sim.physics_material.friction_combine_mode = "max"
@@ -149,7 +157,7 @@ class MoveCESProductG129Dex1WholebodyEnvCfg(ManagerBasedRLEnvCfg):
 
         self.event_manager = SimpleEventManager()
 
-        # Product sits in a tight tray pocket — restore exact default pose.
+        # Product 位于紧凑托盘槽中，reset 必须恢复精确默认位姿，不能随机化。
         self.event_manager.register(
             "reset_object_self",
             SimpleEvent(

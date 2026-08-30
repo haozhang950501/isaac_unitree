@@ -1,14 +1,19 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""CES Baseline FSM facade.
+"""CES Baseline 状态机公共门面。
 
-The only supported runtime path is:
+唯一运行链路为：
 00→10→20→30 → 40(q_ref only) → grasp/lift → 40(live)→30→20→05
 → carry-walk → pin the live pelvis → 05→15 → release → 15→05.
+
+门面只保存共享状态、阶段分发、reset 和异常保护；Pick、Walk、Place
+处理器通过 mixin 共享同一个实例，避免多个控制器之间同步阶段和轨迹状态。
 """
 from __future__ import annotations
 
 import logging
+
+import torch
 
 from action_provider.ces_grasp import constants as C
 from action_provider.ces_grasp.fsm_pick import CesPickMixin, top_down_grasp_quat
@@ -33,7 +38,7 @@ logger = logging.getLogger("ces")
 
 
 class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
-    """Shared-state facade with phase handlers grouped in three focused modules."""
+    """共享单一运行状态，并把阶段处理器按 Pick、Walk、Place 分组。"""
 
     _PHASE_HANDLERS = {
         CesPickPlacePhase.SETTLE: "_step_settle",
@@ -54,11 +59,17 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
     }
 
     def __init__(self, ctx, speed_scale: float | None = None):
+        """装载唯一轨迹清单、缓存设备 Tensor，并初始化共享运行状态。"""
         self.ctx = ctx
         self.device = ctx.device
-        self.interp = CartesianInterpolator(self.device)
-        self.joint_interp = JointSpaceInterpolator(self.device)
+        self.interp = CartesianInterpolator()
+        self.joint_interp = JointSpaceInterpolator()
         self._trajectory: CesTrajectory = load_baseline_trajectory()
+        # 姿态清单在任务期间不会变化，提前搬到运行设备，避免阶段切换重复建 Tensor。
+        self._pose_tensors = {
+            name: torch.tensor(values, device=self.device, dtype=torch.float32)
+            for name, values in self._trajectory.q_by_name.items()
+        }
         self.speed_scale = C.clamp_pick_speed(speed_scale)
 
         self._joint_segment_times = tuple(
@@ -100,17 +111,19 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         )
 
     def _scaled(self, durations, min_time: float = 0.0) -> list[float]:
+        """按用户速度倍率缩放时长，并应用单段最短时间保护。"""
         return scale_segment_times(durations, self.speed_scale, min_time)
 
-    def reset(self):
+    def reset(self) -> None:
+        """恢复 SETTLE 阶段并清空本轮任务的所有实时缓存。"""
         self._reset_runtime()
 
-    def _reset_runtime(self):
+    def _reset_runtime(self) -> None:
+        """初始化单次 Pick→Walk→Place 运行过程中会变化的共享状态。"""
         self.phase = CesPickPlacePhase.SETTLE
         self.t = 0.0
         self.hold = 0.0
         self.gripper = C.GRIPPER_OPEN
-        self._walk = [0.0, 0.0, 0.0, 0.8]
         self._grasp_pos_w = None
         self._grasp_quat_w = None
         self._grasp_arm_q = None
@@ -125,7 +138,7 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         self._place_joint_total_time = 0.0
         self.joint_interp.clear()
         self._walk_mode = "idle"
-        self._walk_leg = 0
+        self._walk_phase = None
         if self._planner is not None:
             self._planner.reset()
         self._turn_pinned_logged = False
@@ -137,14 +150,15 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         self._carry_drop_logged = False
         self._step_err_t = -10.0
 
-    def _transition(self, phase: CesPickPlacePhase):
+    def _transition(self, phase: CesPickPlacePhase) -> None:
+        """切换阶段并清零阶段计时；进入行走时同时重置路线诊断状态。"""
         logger.info("[ces_fsm] %s -> %s t=%.2fs", self.phase.value, phase.value, self.t)
         self.phase = phase
         self.t = 0.0
         self.hold = 0.0
         if phase is CesPickPlacePhase.GOTO_PLACE and self._planner is not None:
             self._planner.reset()
-            self._walk_leg = 0
+            self._walk_phase = None
             self._turn_pinned_logged = False
             self._stopped_logged = False
             self._table_braked = False
@@ -159,6 +173,7 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         arm_q=None,
         arm_q_ref=None,
     ) -> CesCommand:
+        """构造状态机命令，并为 Pick 主链路自动补上场景初始骨盆钉住。"""
         if walk is None and root_pin is None and self.phase in (
             CesPickPlacePhase.SETTLE,
             CesPickPlacePhase.GOTO_PICK,
@@ -180,6 +195,7 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         )
 
     def _squeezing(self) -> bool:
+        """判断本阶段是否必须保持 Dex1 夹紧；失败阶段按是否已抓到产品决定。"""
         if self.phase is CesPickPlacePhase.FAILED:
             return self._carry_arm_q is not None
         return self.phase in (
@@ -192,8 +208,8 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
         )
 
     def step(self) -> CesCommand:
+        """推进一个 50 Hz 控制周期，并在异常时返回不扩散运动的安全命令。"""
         self.t += self.ctx.dt
-        self._walk = [0.0, 0.0, 0.0, 0.8]
         try:
             handler = getattr(self, self._PHASE_HANDLERS[self.phase])
             return handler()

@@ -1,28 +1,29 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""Pure helpers: square the Dex1 jaw onto the product's world-X faces."""
+"""把 Dex1 夹持轴对正 Product 世界 X 短边的纯数学辅助函数。"""
 from __future__ import annotations
 
 import math
 
-# Skip the hover yaw-align leg when pose 30 is already on world ±X.
+# pose 30 已接近世界 ±X 时跳过悬停偏航段，避免无意义的小角度插值。
 YAW_ALIGN_SKIP_RAD = math.radians(8.0)
 
 
 def wrap_pi(rad: float) -> float:
+    """把弧度角归一化到 ``[-pi, pi]``。"""
     return (float(rad) + math.pi) % (2.0 * math.pi) - math.pi
 
 
 def jaw_xy_yaw(jx: float, jy: float) -> float:
-    """Yaw of the jaw's XY projection: 0 = world +X, π = world −X."""
+    """返回夹持轴 XY 投影偏航角：0 为世界 +X，π 为世界 -X。"""
     return math.atan2(float(jy), float(jx))
 
 
 def closer_world_x_yaw(current_yaw: float) -> tuple[float, float]:
-    """Nearest world ±X heading and wrapped delta from ``current_yaw``.
+    """返回最近的世界 ±X 朝向以及从当前偏航到目标的最短角差。
 
-    Pinching the 36 mm world-X faces works with jaw = +X or −X.  The nearer
-    one avoids a ~180° spin above the tray.
+    产品世界 X 短边宽约 36 mm，夹持轴朝 +X 或 -X 都能完成抓取；选择
+    更近的一侧可以避免夹爪在托盘上方旋转接近 180°。
     """
     d_plus = wrap_pi(0.0 - float(current_yaw))
     d_minus = wrap_pi(math.pi - float(current_yaw))

@@ -311,6 +311,7 @@ class DDSRLActionProvider(ActionProvider):
             return torch.tensor(ort_outs[0], device=self.env.device)
         return run_inference
     def compute_current_observations(self, command_override=None):
+        """构造 Wholebody 单帧观测；CES 可直接覆盖四维机体系步态命令。"""
         command = [0,0,0,0.8]
         run_command = None
         if command_override is not None:
@@ -368,6 +369,7 @@ class DDSRLActionProvider(ActionProvider):
     )
         return current_actor_obs
     def compute_observations(self, command_override=None):
+        """把当前观测压入 10 帧历史，并返回裁剪后的策略输入。"""
 
         current_actor_obs = self.compute_current_observations(command_override)
 
@@ -377,18 +379,19 @@ class DDSRLActionProvider(ActionProvider):
         return actor_obs
     
     def run_policy(self, command_override=None):
+        """使用可选 CES 步态命令计算 Wholebody 腿部动作。"""
         current_actor_obs = self.compute_observations(command_override)
         action = self.policy(current_actor_obs)
         return action
 
     def advance_action_history(self, full_action):
-        """Advance the policy action delay buffer with one full joint target."""
+        """把完整关节目标中的策略顺序动作压入延迟缓冲。"""
         return self.action_buffer.compute(
             full_action[self.old_action_indices].unsqueeze(0)
         )
 
     def apply_delayed_policy_legs(self, full_action, delayed_actions):
-        """Convert delayed policy offsets into articulation leg targets."""
+        """把延迟后的策略偏移转换为带默认姿态的腿部关节目标。"""
         clipped_actions = torch.clip(
             delayed_actions[:, self.action_to_indices],
             -self.clip_actions,

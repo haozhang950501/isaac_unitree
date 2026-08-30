@@ -1,6 +1,6 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""Autonomous CES LoadingLine Product pick-and-place."""
+"""CES LoadingLine Product 自动抓取、持物行走和放置公共接口。"""
 
 from .constants import (
     GRIPPER_CLOSED,

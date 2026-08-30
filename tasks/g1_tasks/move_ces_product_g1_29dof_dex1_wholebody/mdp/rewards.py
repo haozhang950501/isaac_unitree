@@ -1,14 +1,16 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""CES LoadingLine product pick-and-place rewards.
+"""CES LoadingLine 产品取放的离散奖励。
 
-+1 when Product is sitting on the packing table, -1 if it has fallen to the
-floor, 0 otherwise (in transit / still on the tray).
+Product 位于包装桌/灰筐有效空间时奖励 +1，低于统一掉落高度时奖励 -1，
+仍在上料托盘或搬运途中时为 0。掉落条件最后覆盖，优先级高于放置成功。
 """
 from __future__ import annotations
 
-import torch
+from functools import cache
 from typing import TYPE_CHECKING
+
+import torch
 
 from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
@@ -23,21 +25,15 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-_rewards_dds = None
-_dds_initialized = False
-
-
+@cache
 def _get_rewards_dds_instance():
-    global _rewards_dds, _dds_initialized
-    if not _dds_initialized or _rewards_dds is None:
-        try:
-            from dds.dds_master import dds_manager
+    """延迟获取并缓存 DDS 奖励对象；不可用时缓存 ``None`` 避免重复异常。"""
+    try:
+        from dds.dds_master import dds_manager
 
-            _rewards_dds = dds_manager.get_object("rewards")
-        except Exception:
-            _rewards_dds = None
-        _dds_initialized = True
-    return _rewards_dds
+        return dds_manager.get_object("rewards")
+    except Exception:
+        return None
 
 
 def compute_reward(
@@ -51,6 +47,11 @@ def compute_reward(
     place_z_min: float = TABLE_TOP_Z + 0.01,
     place_z_max: float = TABLE_TOP_Z + PLACE_TRAY_HEIGHT + 0.12,
 ) -> torch.Tensor:
+    """按 Product 世界位置计算每个环境的 ``-1/0/+1`` 奖励。
+
+    参数默认值直接来自 CES 场景常量。``_reward_interval`` 由原项目
+    ``sim_main`` 设置，用于复用上一帧奖励，避免 DDS 和场景读取过于频繁。
+    """
     interval = getattr(env, "_reward_interval", 1) or 1
     counter = getattr(env, "_reward_counter", 0)
     last = getattr(env, "_reward_last", None)
@@ -73,9 +74,8 @@ def compute_reward(
     )
     dropped = z < drop_height
 
-    reward = torch.zeros(env.num_envs, device=env.device, dtype=torch.float)
-    reward[on_table] = 1.0
-    reward[dropped] = -1.0
+    reward = on_table.to(device=env.device, dtype=torch.float)
+    reward = torch.where(dropped, -torch.ones_like(reward), reward)
 
     rewards_dds = _get_rewards_dds_instance()
     if rewards_dds:

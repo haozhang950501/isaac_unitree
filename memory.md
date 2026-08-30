@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-29，CES `Baseline_done` 已完成单主线深度精简。
+更新时间：2026-08-30，CES `Baseline_done` 已完成全链路深度优化与中文注释改造。
 
 ## 1. 当前任务
 
@@ -76,7 +76,7 @@ CES 专用参数只保留 `--auto_ces_pick_place` 和 `--ces_pick_speed`。
 ## 4. Walk 约束
 
 - whole-body 指令为机体系 `[vx, vy, wz, height]`。
-- Pick 完成第一帧立即发 `vx=-0.45`，调用 `prime_walk_filt`。
+- Pick 完成第一帧立即发 `vx=-0.45`，调用 `prime_walk_filter`。
 - 同时清空 10 帧 actor observation/action history，并给骨盆和夹持产品相同的反向世界速度 kick；否则策略会先朝 CES 跨两步。
 - 路线保持「后退 → 边退边右转 → 正向进站」，固定幅值和死区不变。
 - 桌前 keep-out 是独立闩锁；触发后永久停止并从当前位置放置。
@@ -103,7 +103,7 @@ action_provider/ces_grasp/
 ├── fsm_pick.py        # Pick / Grasp / Lift / Return
 ├── fsm_walk.py        # Carry walk / keep-out / live pelvis pin
 ├── fsm_place.py       # Place hold / 05→15 / Release / 15→05
-├── navigation.py      # 机体系分段步行规划
+├── navigation.py      # 固定 BACKOFF→TURN→APPROACH→DONE 步行规划
 ├── interpolation.py   # torch.lerp / bisect / Hermite / Isaac Lab slerp
 ├── ik_solver.py       # CES 专用 DLS IK 和动态 q_ref 零空间控制
 ├── pose_library.py    # 校验并加载单一 Smooth V1 运行清单
@@ -111,17 +111,20 @@ action_provider/ces_grasp/
 └── poses/ces_pick_smooth_v1/trajectory_manifest.json
 ```
 
-已删除：笛卡尔 Pick/Place、换站瞬移与产品搬运、旧兼容参数、通用 `manip_common` 抽象、V1/V2 回退、Z-only Place、无效场景改色和未引用函数。
+已删除：笛卡尔 Pick/Place、换站瞬移与产品搬运、旧兼容参数、通用 `manip_common` 抽象、V1/V2 回退、Z-only Place、旧通用路段类型、无效场景改色和未引用函数。
+
+动作提供器已按「步态解析 → 关节目标 → 夹爪/历史 → 四个物理子步」拆分；IK 固定为 CES 全位姿 DLS 接口，导航固定为唯一三段路线。所有 CES 新增 Python 文件均使用中文模块、类、函数和关键逻辑注释；运行日志与对外标识保持英文以避免破坏接口。
 
 ## 7. 本地代码检查
 
-临时 CPU 回归代码已在全部通过后按计划删除。删除前检查覆盖：
+临时 CPU 回归代码已在全部通过后按计划删除。2026-08-30 最终回归共 50 项，结果为 `OK`。删除前检查覆盖：
 
 - Smooth V1 清单、实际 05/15 q、插值连续性和速度缩放
 - 40 只能通过 `arm_q_ref` 下发
 - `40(live)→30→20→05` 返回路径
-- 第一帧反向 walk、路线规划、停止线和 keep-out
+- 假上下文第一帧反向 walk、路线规划、停止线和 keep-out
 - 实际骨盆位姿钉住、15 松爪、无旧版笛卡尔下降阶段
-- Python 语法、JSON 解析、模块导入和旧分支残留搜索
+- 单调 Hermite 无超调、抓取偏航纯函数、奖励/终止共用掉落高度
+- Python 语法、JSON 解析、模块导入环、公开导出、中文注释和旧分支残留搜索
 
 这些检查不是 Isaac Sim / 阿里云物理验收，不据此声称抓取、摩擦、平衡或放置物理结果。

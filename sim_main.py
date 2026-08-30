@@ -440,6 +440,7 @@ def main():
     env.reset()
 
     if args_cli.auto_ces_pick_place:
+        # CES 自动链路在创建 DDS 前固定启用 Wholebody 策略与 Dex1 通道。
         args_cli.enable_wholebody_dds = True
         args_cli.enable_dex1_dds = True
 
@@ -502,8 +503,6 @@ def main():
     try:
         print(f"args_cli.task: {args_cli.task}")
         if args_cli.auto_ces_pick_place:
-            args_cli.enable_wholebody_dds = True
-            args_cli.enable_dex1_dds = True
             control_config.use_rl_action_mode = True
             args_cli.action_source = "ces_grasp"
         elif not args_cli.replay_data and ("Wholebody" in args_cli.task or args_cli.enable_wholebody_dds):
@@ -591,8 +590,6 @@ def main():
                                 env_cfg.event_manager.trigger("reset_object_self", env)
                             if hasattr(action_provider, "reset_task"):
                                 action_provider.reset_task()
-                            elif hasattr(action_provider, "fsm"):
-                                action_provider.fsm.reset()
                             env.scene.write_data_to_sim()
                             env.sim.forward()
                             env.sim.render()
@@ -653,8 +650,6 @@ def main():
                             elif reset_category == '2' and not args_cli.enable_wholebody_dds:
                                 print("reset all")
                                 env_cfg.event_manager.trigger("reset_all_self", env)
-                                if hasattr(action_provider, "fsm"):
-                                    action_provider.fsm.reset()
                                 reset_pose_dds.write_reset_pose_command(-1)
                         except Exception as e:
                             print(f"Failed to write reset pose command: {e}")

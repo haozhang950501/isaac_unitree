@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 
-from action_provider.ces_grasp.navigation import WalkGait, build_carry_route
+from action_provider.ces_grasp.navigation import CarryWalkConfig, build_carry_route
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
     PICK_STAND_XY as SCENE_PICK_STAND_XY,
     PLACE_TRAY_CENTER_XY,
@@ -20,7 +20,7 @@ from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
 # 产品 AABB 36×138.5×25.5 mm；夹世界 X 短边，手指朝下。
 TCP_LOCAL = (0.0, 0.115, 0.0)
 GRIPPER_OPEN = -0.010
-GRIPPER_CLOSED = 0.019  # gap ≈ 12 mm
+GRIPPER_CLOSED = 0.019  # 估算指间隙约 12 mm。
 
 EE_BODY = "right_hand_base_link"
 RIGHT_ARM_JOINTS = [
@@ -61,7 +61,7 @@ GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
 # root pin 每帧把骨盆写回场景初始位姿、速度清零，所以 is_standing()
 # 从第一帧就为真 —— 原来的 1.0/0.6/0.5（合计 2.1 s）纯粹是空烧。
 # 缩短的只是计时门槛，is_standing() 的判定本身没动：真站不稳仍会一直等，
-# 最坏由 _navigate 的 6 s 超时兜底。若改成非 pin 起步（机器人要自己走到
+# 最坏由 _at_pick_stand 的 6 s 超时兜底。若改成非 pin 起步（机器人要自己走到
 # 抓取站、或 spawn 时会晃），把这三个值调回 1.0/0.6/0.5。
 SETTLE_TIME = 0.3
 STAND_MIN_TIME = 0.2
@@ -70,8 +70,8 @@ STAND_TILT_MAX = 0.18
 STAND_YAW_RATE_MAX = 0.45
 STAND_XY_SPEED_MAX = 0.12
 DESCEND_TIME = 0.70
-# Pose 30 leaves the Dex1 jaw ~68° off world X.  Hover (lock XY/Z) and slerp
-# yaw onto ±X before the Z drop, so DiffIK does not twist while entering the tray.
+# Pose 30 的 Dex1 夹持轴偏离世界 X 约 68°。下降前锁定 XY/Z 悬停，
+# 先用 SLERP 对齐到世界 ±X，避免 DiffIK 进入托盘时同时扭转手腕。
 GRASP_YAW_ALIGN_TIME = 0.35
 GRASP_TIME = 0.60
 GRASP_WAIT_MAX = 0.25
@@ -83,6 +83,13 @@ RETRACT_HOME_TIME = 1.6
 
 ARM_SLEW_RAD = 0.080
 ARM_SLEW_RAD_LIFT = 0.012  # 夹持后慢跟，垫面不瞬移
+
+# Dex1 夹爪只使用 PD 接触夹持；这些值同时写入 actuator 和 PhysX 关节属性。
+DEX1_STIFFNESS = 1800.0
+DEX1_DAMPING = 30.0
+DEX1_EFFORT_LIMIT = 80.0
+# CES 一个 50 Hz 控制周期固定推进四个 0.005 s 物理子步。
+CONTROL_DECIMATION = 4
 
 # 路点 JSON 按关节名匹配，不改 DDS 下标。00→10→20→30 连续速度，
 # 30→40 只作 q_ref；运行时只支持 Smooth V1 Baseline。
@@ -104,6 +111,7 @@ PICK_SEGMENT_MIN_TIME = 0.40
 
 
 def clamp_pick_speed(scale: float | None) -> float:
+    """把可选 Pick 速度倍率限制到已验证安全范围。"""
     if scale is None:
         return PICK_SPEED_SCALE
     return min(PICK_SPEED_MAX, max(PICK_SPEED_MIN, float(scale)))
@@ -161,7 +169,6 @@ WALK_LATERAL_ARRIVE = 0.10
 WALK_ALIGN_YAW = 0.20
 WALK_YAW_ARRIVE_FINAL = WALK_ALIGN_YAW
 WALK_REALIGN_YAW = 0.60  # 歪太多：停下平移，先转正
-WALK_LEG_SETTLE = 0.5  # 每段之间零指令停稳，避免后退接右转时混合指令
 WALK_ARRIVE_HOLD = 0.35
 # walk 到站钉盆后只短暂冻 05。1.5 s 太长；钉盆本身已刹住摇摆。
 WALK_PLACE_HOLD_TIME = 0.45
@@ -171,15 +178,20 @@ WALK_VY_ACCEL = 1.00
 WALK_WZ_ACCEL = 2.00
 WALK_ABORT_TILT = 0.55
 WALK_ABORT_HOLD = 0.40
+# 策略的第四维命令是目标骨盆高度，所有站立、行走和刹停命令保持一致。
+WALK_HEIGHT = 0.8
+# ``vx`` 低于该值时策略只会晃动；速度换向必须直接跨过这个死区。
+WALK_POLICY_VX_DEADBAND = 0.30
 
 
 def forward_left(yaw: float) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Body x = forward, body y = left, for a Z-up yaw (0 = +X)."""
+    """由 Z-up 偏航角返回机体系前向 X 和左向 Y 的世界二维单位向量。"""
     c, s = math.cos(yaw), math.sin(yaw)
     return (c, s), (-s, c)
 
 
 def stand_xy(target_xy: tuple[float, float], yaw: float, x_b: float, y_b: float) -> tuple[float, float]:
+    """由目标点在机体系中的前向/左向偏移反算骨盆世界 XY。"""
     fwd, left = forward_left(yaw)
     return (
         target_xy[0] - (x_b * fwd[0] + y_b * left[0]),
@@ -207,7 +219,7 @@ PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_
 # ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
 # ② 边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
 # ③ 不停步，直接发 W（机体系 +vx）；转正后这就是世界 +Y，走进放置站
-CARRY_WALK_GAIT = WalkGait(
+CARRY_WALK_CONFIG = CarryWalkConfig(
     vx=WALK_VX,
     vy=WALK_VY,
     wz=WALK_WZ,
@@ -216,7 +228,7 @@ CARRY_WALK_GAIT = WalkGait(
     lateral_tol=WALK_LATERAL_TOL,
     align_yaw=WALK_ALIGN_YAW,
     realign_yaw=WALK_REALIGN_YAW,
-    leg_settle=WALK_LEG_SETTLE,
+    height=WALK_HEIGHT,
     turn_vx=WALK_TURN_VX,
     reverse_vx=WALK_REVERSE_VX,
     wz_max=WALK_WZ_MAX,
@@ -225,7 +237,7 @@ CARRY_WALK_GAIT = WalkGait(
     lateral_arrive=WALK_LATERAL_ARRIVE,
     yaw_arrive=WALK_YAW_ARRIVE_FINAL,
 )
-CARRY_WALK_LEGS = build_carry_route(
+CARRY_WALK_ROUTE = build_carry_route(
     pick_xy=PICK_STAND_XY,
     pick_yaw=PICK_STAND_YAW,
     place_xy=PLACE_STAND_XY,
