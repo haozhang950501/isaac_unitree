@@ -49,7 +49,10 @@ class CesPickMixin:
         return out
 
     def _into_drawer(self, pos: torch.Tensor, dist: float) -> torch.Tensor:
-        """沿抓取站机体系前向把世界位置推进上料抽屉。"""
+        """沿抓取站机体系前向把世界位置推进上料抽屉。
+
+        当前抓取站朝世界 -X，所以正 ``dist`` 会让目标点向世界 -X 收进抽屉。
+        """
         out = pos.clone()
         forward, _ = C.forward_left(C.PICK_STAND_YAW)
         out[:, 0] += dist * forward[0]
@@ -57,7 +60,10 @@ class CesPickMixin:
         return out
 
     def _plan_grasp(self) -> None:
-        """以 Product AABB 中心规划世界系抓取点和手指朝下姿态。"""
+        """以 Product AABB 中心规划世界系抓取点和手指朝下姿态。
+
+        Product 的 USD pivot 不一定在几何中心；抓取目标以 AABB 中心为准。
+        """
         pivot, _ = self.ctx.get_object_pose_w()
         obj_pos, _ = self.ctx.get_product_aabb_center_w()
         grasp = self._into_drawer(obj_pos, C.GRASP_INSET)

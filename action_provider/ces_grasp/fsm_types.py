@@ -15,6 +15,7 @@ else:
     # 保持该纯类型模块可在没有 PyTorch/Isaac Sim 的 CPU 检查环境中导入。
     Tensor = Any
 
+# root pin 使用世界位置和 wxyz 四元数；walk 命令使用机体系 vx/vy/wz/height。
 RootPose = tuple[
     tuple[float, float, float],
     tuple[float, float, float, float],

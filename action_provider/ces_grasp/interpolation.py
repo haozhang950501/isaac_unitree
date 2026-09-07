@@ -12,13 +12,13 @@ from bisect import bisect_left
 
 import torch
 
-
+# CES 轨迹插值器工具函数，实现三次 smoothstep
 def ease_in_out(value: float) -> float:
     """对归一化标量执行三次 smoothstep，并把输入限制在 ``[0, 1]``。"""
     value = max(0.0, min(1.0, value))
-    return value * value * (3.0 - 2.0 * value)
+    return value * value * (3.0 - 2.0 * value) #S(t) = 3t^2 - 2t^3,t∈[0,1]
 
-
+# 缩放各段时长的工具函数
 def scale_segment_times(
     durations, scale: float, min_time: float = 0.0
 ) -> list[float]:
@@ -26,7 +26,7 @@ def scale_segment_times(
     factor = max(1e-3, float(scale))
     return [max(float(min_time), float(duration) / factor) for duration in durations]
 
-
+# 把各段时长转换为累计结束时间，并返回总时长的工具函数
 def _bounds(durations: list[float]) -> tuple[list[float], float]:
     """把各段时长转换为累计结束时间，并返回总时长。"""
     bounds: list[float] = []
@@ -45,7 +45,7 @@ def _segment(bounds: list[float], elapsed: float) -> tuple[int, float, float]:
     phase = max(0.0, min(1.0, (elapsed - start) / length))
     return index, length, phase
 
-
+# 球面线性插值 SLERP
 def _quat_slerp(q0: torch.Tensor, q1: torch.Tensor, phase: float) -> torch.Tensor:
     """逐环境调用 Isaac Lab 的单四元数 SLERP。
 
@@ -58,7 +58,7 @@ def _quat_slerp(q0: torch.Tensor, q1: torch.Tensor, phase: float) -> torch.Tenso
         [quat_slerp(a, b.clone(), phase) for a, b in zip(q0, q1)], dim=0
     )
 
-
+# 计算单调三次 Hermite 路点速度的工具函数
 def _monotone_cubic_slopes(
     points: list[torch.Tensor], durations: list[float]
 ) -> list[torch.Tensor]:
@@ -82,7 +82,7 @@ def _monotone_cubic_slopes(
         slopes[index] = slope
     return slopes
 
-
+# 末端执行器的笛卡尔位置和姿态轨迹
 class CartesianInterpolator:
     """按时间推进笛卡尔分段路径，并对每段姿态执行四元数插值。"""
 
@@ -146,7 +146,7 @@ class CartesianInterpolator:
         )
         return pos, quat
 
-
+# 关节空间轨迹插值器
 class JointSpaceInterpolator:
     """支持 smoothstep 和单调 Hermite 的关节空间分段插值器。"""
 

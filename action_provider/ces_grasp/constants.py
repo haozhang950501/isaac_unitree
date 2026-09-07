@@ -1,27 +1,28 @@
 # Copyright (c) 2025, Unitree Robotics Co., Ltd. All Rights Reserved.
 # License: Apache License, Version 2.0
-"""CES 取放常量。站位：stand_xy = target_xy - (x_b*前 + y_b*左)。"""
+"""CES 取放常量。"""
 from __future__ import annotations
 
 import math
 
 from action_provider.ces_grasp.navigation import CarryWalkConfig, build_carry_route
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
-    PICK_STAND_XY as SCENE_PICK_STAND_XY,
     PLACE_TRAY_CENTER_XY,
-    PLACE_TRAY_HEIGHT,
     ROBOT_INIT_POS,
     ROBOT_INIT_ROT,
     ROBOT_STAND_YAW,
-    TABLE_TOP_Z,
 )
 
-# Dex1：q 增大则闭合。gap ≈ 0.050 - 2q (m)
-# 产品 AABB 36×138.5×25.5 mm；夹世界 X 短边，手指朝下。
+# ---------------------------------------------------------------------------
+# IK、关节命名与 Dex1 夹爪接口。
+# ---------------------------------------------------------------------------
+# TCP 是右手基座坐标系中的局部偏移；ArmDiffIK 用它把手腕位姿换算为工具位姿。
 TCP_LOCAL = (0.0, 0.115, 0.0)
+# Dex1 的关节 q 增大时闭合，标定间隙近似为 gap = 0.050 - 2q（m）。
 GRIPPER_OPEN = -0.010
-GRIPPER_CLOSED = 0.019  # 估算指间隙约 12 mm。
+GRIPPER_CLOSED = 0.019  # 目标间隙约 12 mm；实际夹持力由接触 PD 产生。
 
+# ArmDiffIK 的末端 link；以下列表的顺序必须与姿态 JSON 的关节顺序一致。
 EE_BODY = "right_hand_base_link"
 RIGHT_ARM_JOINTS = [
     "right_shoulder_pitch_joint",
@@ -44,8 +45,17 @@ LEFT_ARM_JOINTS = [
 RIGHT_GRIPPER_JOINTS = ["right_hand_Joint1_1", "right_hand_Joint2_1"]
 LEFT_GRIPPER_JOINTS = ["left_hand_Joint1_1", "left_hand_Joint2_1"]
 
-# 站位：target - (x_b*前 + y_b*左)。抓取站靠近托盘，右手能伸进上料口。
-# 抓取站位与 spawn 同源（机器人直接生成在抓取站，不再瞬移）。
+# Dex1 夹爪只使用 PD 接触夹持；这些值同时写入 actuator 和 PhysX 关节属性。
+DEX1_STIFFNESS = 1800.0
+DEX1_DAMPING = 30.0
+DEX1_EFFORT_LIMIT = 80.0
+
+# CES 一个 50 Hz 控制周期固定推进四个 0.005 s 物理子步。
+CONTROL_DECIMATION = 4
+
+# ---------------------------------------------------------------------------
+# 抓取与放置的几何标定（长度单位：m）。
+# ---------------------------------------------------------------------------
 X_B_PLACE = 0.46
 Y_B_PLACE = -0.18
 
@@ -57,12 +67,16 @@ GRASP_SHIFT_Y = 0.0
 PRODUCT_HALF_Z = 0.01275
 GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
 GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
+
+# ---------------------------------------------------------------------------
+# 抓取、放置阶段的计时和站稳判定（时间单位：s，角度单位：rad）。
+# ---------------------------------------------------------------------------
 # 按 s 到右臂起动之间的等待就是这三个计时器。SETTLE / GOTO_PICK 全程由
 # root pin 每帧把骨盆写回场景初始位姿、速度清零，所以 is_standing()
-# 从第一帧就为真 —— 原来的 1.0/0.6/0.5（合计 2.1 s）纯粹是空烧。
+# 从第一帧就为 true。
 # 缩短的只是计时门槛，is_standing() 的判定本身没动：真站不稳仍会一直等，
-# 最坏由 _at_pick_stand 的 6 s 超时兜底。若改成非 pin 起步（机器人要自己走到
-# 抓取站、或 spawn 时会晃），把这三个值调回 1.0/0.6/0.5。
+# 最坏由 _at_pick_stand 的 6 s 超时兜底。若改成非 pin 起步（机器人要自己
+# 走到抓取站，或 spawn 后会晃），把这三个值调回 1.0/0.6/0.5。
 SETTLE_TIME = 0.3
 STAND_MIN_TIME = 0.2
 STAND_STABLE_TIME = 0.2
@@ -81,15 +95,11 @@ RELEASE_TIME = 0.8
 RETRACT_TIME = 1.6
 RETRACT_HOME_TIME = 1.6
 
+# ---------------------------------------------------------------------------
+# 关节轨迹的连续性、限幅与速度缩放。
+# ---------------------------------------------------------------------------
 ARM_SLEW_RAD = 0.080
 ARM_SLEW_RAD_LIFT = 0.012  # 夹持后慢跟，垫面不瞬移
-
-# Dex1 夹爪只使用 PD 接触夹持；这些值同时写入 actuator 和 PhysX 关节属性。
-DEX1_STIFFNESS = 1800.0
-DEX1_DAMPING = 30.0
-DEX1_EFFORT_LIMIT = 80.0
-# CES 一个 50 Hz 控制周期固定推进四个 0.005 s 物理子步。
-CONTROL_DECIMATION = 4
 
 # 路点 JSON 按关节名匹配，不改 DDS 下标。00→10→20→30 连续速度，
 # 30→40 只作 q_ref；运行时只支持 Smooth V1 Baseline。
@@ -97,8 +107,8 @@ WAYPOINT_LEAD_IN_TIME = 0.25
 WAYPOINT_LEAD_IN_TOL = 0.05
 
 # Pick 提速：UNFOLD(00→30) / LIFT / RETURN_HOME 这三段关节轨迹的时长整体除以
-# 这个倍率。均匀时间缩放不改关节空间曲线，只把每个速度乘以倍率，所以 URDF-viz
-# 里确认过的姿态和 monotone_cubic_hermite 的连续性都原样保留。
+# 这个倍率。均匀时间缩放不改关节空间曲线，只把每个速度乘以倍率，所以
+# URDF-viz 里确认过的姿态和 monotone_cubic_hermite 的连续性都原样保留。
 # DESCEND / GRASP 不缩放：一个是落 Z 的对位精度，一个是夹爪闭合时间。
 PICK_SPEED_SCALE = 1.5
 PICK_SPEED_MIN = 0.25
@@ -116,7 +126,10 @@ def clamp_pick_speed(scale: float | None) -> float:
         return PICK_SPEED_SCALE
     return min(PICK_SPEED_MAX, max(PICK_SPEED_MIN, float(scale)))
 
-# CARRY 后的双足换站。策略命令是机体系 [vx, vy, wz, height]。
+
+# ---------------------------------------------------------------------------
+# CARRY 后的机体系双足换站 [vx, vy, wz, height]。
+# ---------------------------------------------------------------------------
 # 关键约束：策略对小指令不迈步（键盘点动走不动，必须长按把指令拉起来），
 # 所以平移/转向都用固定幅值 + 死区，不用比例控制。幅值参考键盘长按能走的量级。
 WALK_VX = 0.45  # 前进/后退幅值；< 0.3 基本只前后晃不迈步
@@ -130,24 +143,17 @@ WALK_VY = 0.40
 WALK_WZ = 1.20
 WALK_WZ_MAX = 1.55  # 漂移保护触发后的升级幅值，仍在键盘上限内
 # 纯偏航（vx=vy=0）顶不起步态：转向段一直带着后退走，画一段弧把身子转过去。
-# 用后退而不是前进：后退是唯一实测能迈步的模式，且第③段因此保留近 1 m 行程。
+# 用后退而不是前进：后退是唯一实测能迈步的模式，且第3段因此保留近 1 m 行程。
 WALK_TURN_VX = 0.45
 WALK_TURN_MAX_DRIFT = 0.70  # 转弧走了这么远还没转到位 = 策略没吃下 wz
-# 指令归零后策略还会多走一点：提前 stop_margin 松"油门"。
+# 指令归零后策略还会多走一点：提前 stop_margin 松油门。
 # 若实测停不到位（走过头撞桌 / 差太多够不到灰筐），只调这两个值。
 WALK_STOP_MARGIN = 0.15
-# 最后一段：宁可停短，绝不许过。放置站骨盆离桌沿现在只有约 2 cm，走过头直接撞桌。
-# 新 Place 不再追世界灰筐中心：05→15 后只落 Z，所以停位 XY 误差不会由手臂补偿；
-# 用户明确接受不设 TCP X/Y 目标，安全上仍以不越过桌沿为第一优先级。
-# 0.20 撞过桌：`vx=0.45` 松手后滑行约 0.25 m，比余量还大，到 0.20 才停必然冲过去。
-# 又因为 `vx` 不能降到死区以下（低了根本不迈步），没法缓刹，只能提前松手。
-# 取 0.30 ≈ 滑行量：滑行 0.10~0.30 时落点在放置站前 0.20~0.00，**不会越过站点**。
+# 取 0.30 ≈ 滑行量：滑行 0.10~0.30 时落点在放置站前 0.20~0.00，不会越过站点。
 WALK_STOP_MARGIN_PLACE = 0.30
-# 桌沿在放置站正前方约这么远（骨盆投影）。只用于硬性禁入判定，不参与规划。
-# 2026-08-24 桌 −Y 12 cm 后近沿约在放置站前 2 cm（HeavyDuty 半宽 0.381）。
+# 放置站前 2 cm
 WALK_TABLE_AHEAD_OF_STAND = 0.02
 # 骨盆离桌沿的最小安全距离：越过 (放置站 + AHEAD - SAFE) 就无条件停死并告警。
-# 这是兜底闩锁，不依赖任何规划逻辑 —— 前两次撞桌都是规划分支漏了停止条件。
 WALK_TABLE_SAFE = 0.06
 # 后退段少退一个转弧半径，再提前一点给 wz 爬升和滑行留余量。
 # 理论 R=vx/wz=0.375 m；实测转得太晚会把世界 X 走出放置站，后面还要用 −X 往回纠。
@@ -160,7 +166,7 @@ WALK_BACKOFF_TRIM = 0.0
 # 也就是余转合计约 28°，所以提前到约 23° 松手。
 WALK_YAW_ARRIVE = 0.40
 WALK_LATERAL_TOL = 0.10  # 侧向偏差超过才侧移纠偏（回差：降到 0.04 才松手）
-# 最后一段"希望"停成的姿态窗口：侧向 / 朝向。**只用于报告，不参与判停** ——
+
 # 桌子就在放置站前 12 cm，为了摆正而继续在桌边挪动正是前两次撞桌的原因。
 # 没进窗口只会打 off-target 告警，姿态靠进站途中的斜行去纠。
 WALK_LATERAL_ARRIVE = 0.10
@@ -180,7 +186,7 @@ WALK_ABORT_TILT = 0.55
 WALK_ABORT_HOLD = 0.40
 # 策略的第四维命令是目标骨盆高度，所有站立、行走和刹停命令保持一致。
 WALK_HEIGHT = 0.8
-# ``vx`` 低于该值时策略只会晃动；速度换向必须直接跨过这个死区。
+# vx 低于该值时策略只会晃动；速度换向必须直接跨过这个死区。
 WALK_POLICY_VX_DEADBAND = 0.30
 
 
@@ -190,19 +196,10 @@ def forward_left(yaw: float) -> tuple[tuple[float, float], tuple[float, float]]:
     return (c, s), (-s, c)
 
 
-def stand_xy(target_xy: tuple[float, float], yaw: float, x_b: float, y_b: float) -> tuple[float, float]:
-    """由目标点在机体系中的前向/左向偏移反算骨盆世界 XY。"""
-    fwd, left = forward_left(yaw)
-    return (
-        target_xy[0] - (x_b * fwd[0] + y_b * left[0]),
-        target_xy[1] - (x_b * fwd[1] + y_b * left[1]),
-    )
-
-
 # 抓取站在托盘左侧，右手伸进上料口。yaw=π 朝 -X（整簇已转 +180°）。
 # 机器人 spawn 就在抓取站，Pick 阶段钉住完整初始骨盆位姿。
 PICK_STAND_YAW = math.radians(ROBOT_STAND_YAW)
-PICK_STAND_XY = SCENE_PICK_STAND_XY
+PICK_STAND_XY = (ROBOT_INIT_POS[0], ROBOT_INIT_POS[1])
 PICK_ROOT_PIN = (
     tuple(float(value) for value in ROBOT_INIT_POS),
     tuple(float(value) for value in ROBOT_INIT_ROT),
@@ -210,15 +207,14 @@ PICK_ROOT_PIN = (
 
 # 放置站面向桌子（yaw=π/2）。站位按桌心 **Y 偏移之前** 的位置算，不跟
 # 2026-08-24 的桌子 −Y 平移走，否则 15 的 +Y 伸手距离原样不变。
-# PLACE_TARGET_XY 才是灰筐中心（随桌子一起 −Y）。
+# PLACE_TARGET_XY 是灰筐中心。
 PLACE_STAND_YAW = 0.5 * math.pi
 PLACE_TARGET_XY = PLACE_TRAY_CENTER_XY
-_PLACE_STAND_FROM_XY = (-2.0869, -0.3117)
-PLACE_STAND_XY = stand_xy(_PLACE_STAND_FROM_XY, PLACE_STAND_YAW, X_B_PLACE, Y_B_PLACE)
+PLACE_STAND_XY = (-2.2669, -0.7717)
 # CARRY 后的换站路线（机器人在 pick 站朝 -X，后退即走世界 +X）：
-# ① 后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
-# ② 边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
-# ③ 不停步，直接发 W（机体系 +vx）；转正后这就是世界 +Y，走进放置站
+# 1.后退到"转弧入弧点"（与放置站对齐的角点再少退一个转弧半径）
+# 2.边后退边右转 yaw π → π/2，弧终点落回放置站进入线，正对桌子
+# 3.不停步，直接发 W（机体系 +vx）；转正后这就是世界 +Y，走进放置站
 CARRY_WALK_CONFIG = CarryWalkConfig(
     vx=WALK_VX,
     vy=WALK_VY,

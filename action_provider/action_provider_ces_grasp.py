@@ -200,7 +200,7 @@ class CESGraspActionProvider(DDSRLActionProvider):
         self._walk_cmd[3] = target[3]
         return list(self._walk_cmd)
 
-    # 以下方法组成 FSM 使用的运行上下文接口；状态机不直接读取仿真内部对象。
+    # 下面这些方法是 FSM 的窄上下文接口；状态机通过它们读状态，不直接访问 env.scene。
     @property
     def device(self):
         """向 FSM 暴露环境运行设备。"""
