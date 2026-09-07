@@ -58,18 +58,19 @@ class CesPlaceMixin:
         """以 DEBUG 记录产品与灰筐的相对位置，不参与控制和成功判定。"""
         try:
             obj_pos, _ = self.ctx.get_object_pose_w()
+            x, y, z = (float(obj_pos[0, i]) for i in range(3))
+            tx, ty = C.PLACE_TARGET_XY
+            tray_top = C.TABLE_TOP_Z + C.PLACE_TRAY_HEIGHT
+            logger.debug(
+                f"[ces_verify] {tag} product=({x:.4f},{y:.4f},{z:.4f}) "
+                f"tote=({tx:.4f},{ty:.4f},z={tray_top:.3f}) "
+                f"dxy={math.hypot(x-tx,y-ty)*1000:.0f}mm "
+                f"above_tray={(z-tray_top)*1000:+.0f}mm"
+            )
         except Exception as exc:
-            logger.debug("[ces_verify] %s product pose unavailable: %s", tag, exc)
-            return
-        x, y, z = (float(obj_pos[0, i]) for i in range(3))
-        tx, ty = C.PLACE_TARGET_XY
-        tray_top = C.TABLE_TOP_Z + C.PLACE_TRAY_HEIGHT
-        logger.debug(
-            f"[ces_verify] {tag} product=({x:.4f},{y:.4f},{z:.4f}) "
-            f"tote=({tx:.4f},{ty:.4f},z={tray_top:.3f}) "
-            f"dxy={math.hypot(x-tx,y-ty)*1000:.0f}mm "
-            f"above_tray={(z-tray_top)*1000:+.0f}mm"
-        )
+            # 该函数只提供诊断信息，任何采样或格式化错误都不能中断
+            # RELEASE→RETRACT 或 RETRACT→DONE 的主控制链路。
+            logger.debug("[ces_verify] %s result unavailable: %s", tag, exc)
 
     def _step_place_hold(self):
         """钉住实际骨盆并保持 pose 05 共 0.45 秒，让步态交接稳定。"""

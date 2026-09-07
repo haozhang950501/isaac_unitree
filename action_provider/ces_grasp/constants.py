@@ -8,9 +8,11 @@ import math
 from action_provider.ces_grasp.navigation import CarryWalkConfig, build_carry_route
 from tasks.common_scene.base_scene_ces_pickplace_wholebody import (
     PLACE_TRAY_CENTER_XY,
+    PLACE_TRAY_HEIGHT,
     ROBOT_INIT_POS,
     ROBOT_INIT_ROT,
     ROBOT_STAND_YAW,
+    TABLE_TOP_Z,
 )
 
 # ---------------------------------------------------------------------------
@@ -65,8 +67,8 @@ LIFT_SHIFT_Y = -0.06
 GRASP_INSET = 0.020  # 世界 -X 收进抽屉，避免 +X 指卡槽
 GRASP_SHIFT_Y = 0.0
 PRODUCT_HALF_Z = 0.01275
-GRASP_Z_CLEARANCE = 0.022  # 夹上沿，太深会咬凹槽
-GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.035
+GRASP_Z_CLEARANCE = 0.007  # 比原基线沿世界 -Z 累计加深 15 mm
+GRASP_Z_OFFSET = PRODUCT_HALF_Z + GRASP_Z_CLEARANCE  # ≈ 0.020
 
 # ---------------------------------------------------------------------------
 # 抓取、放置阶段的计时和站稳判定（时间单位：s，角度单位：rad）。

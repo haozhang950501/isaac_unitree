@@ -1,6 +1,6 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-08-30，CES `Baseline_done` 已完成全链路深度优化与中文注释改造。
+更新时间：2026-09-08，CES 全链路已完成 Place 收尾安全修复与 Pick 夹持深度优化，并通过 Isaac Sim 物理验证。
 
 ## 1. 当前任务
 
@@ -48,6 +48,7 @@ CES 专用参数只保留 `--auto_ces_pick_place` 和 `--ces_pick_speed`。
 - 30 到位后先在当前高度把夹爪偏航对齐世界 ±X，再锁住世界 XY 下降。
 - 40 永远只是下降阶段的动态零空间 `q_ref`，不能作为 `arm_q` 下发。
 - 抓住后只求解一次抬升 IK，随后用关节插补抬起，避免摩擦夹持时逐帧 DiffIK 抖动。
+- Pick TCP 的 Z 目标由 Product AABB 中心、`PRODUCT_HALF_Z` 和 `GRASP_Z_CLEARANCE` 共同决定；当前 `GRASP_Z_CLEARANCE=0.007`、`GRASP_Z_OFFSET=0.01975`，相对原始 0.022 基线沿世界 `-Z` 累计加深 15 mm，以增加指垫接触高度。不要通过修改 pose 40 调整抓取深度。
 
 ### Return
 
@@ -86,7 +87,7 @@ CES 专用参数只保留 `--auto_ces_pick_place` 和 `--ces_pick_speed`。
 
 - 机器人 spawn 在抓取站：约 `(-3.187, -1.330, 0.8)`，yaw=π。
 - Pick 控制时骨盆钉在场景 `ROBOT_INIT_POS/ROBOT_INIT_ROT`，不再另设站位高度缓存。
-- 桌面 `TABLE_TOP_EXTRA_Z=0.020`，桌面约 0.6373 m。
+- 桌面 `TABLE_TOP_Z=0.6373`，包装桌 Z 缩放 `TABLE_SCALE_Z=0.6411`。
 - 产品质量 0.25 kg。
 - 摩擦：Dex1 pads `12/10`，Product `0.8/0.6`，LoadingLine tray `0.15/0.10`。
 - 仓库墙壁保持显示；默认视角为 `PerspectiveCamera_robot`。
@@ -128,3 +129,21 @@ action_provider/ces_grasp/
 - Python 语法、JSON 解析、模块导入环、公开导出、中文注释和旧分支残留搜索
 
 这些检查不是 Isaac Sim / 阿里云物理验收，不据此声称抓取、摩擦、平衡或放置物理结果。
+
+## 8. 2026-09-08 验证与修复记录
+
+### Place 收尾失稳修复
+
+- 场景参数整理时，`constants.py` 漏导入仍被 `fsm_place.py::_log_place_result()` 使用的 `TABLE_TOP_Z` 和 `PLACE_TRAY_HEIGHT`。
+- 异常只在 RELEASE 满 0.8 s 后触发，且发生在 `_begin_retract()` 与切换 RETRACT 之前，因此状态机卡在 RELEASE。
+- 原异常兜底没有为 Place 阶段返回 `root_pin`，导致到站骨盆突然解除锁定并切回默认腿目标，表现为 Place 结束后机器人失稳乱飞。
+- 已恢复两个场景常量导入；Place 结果日志的全部采样、计算和格式化均隔离异常，诊断失败不能再中断主控制链路。
+- PLACE_HOLD、PLACE_APPROACH、RELEASE、RETRACT、DONE 的异常兜底继续使用 `_place_lock_pose`，避免放置期间因非关键异常解除骨盆锁定。
+- 修复后已完成 Isaac Sim 全链路验证，RELEASE 能正常进入 RETRACT 和 DONE，机器人不再在收尾阶段失稳。
+
+### Pick 夹持深度优化
+
+- 产品偶发在 LIFT 完成后的 RETURN_HOME 回缩过程中滑落，判断为浅夹持降低了对关节运动加速度的抗扰余量。
+- 保持 pose 40、Dex1 PD、摩擦和回缩轨迹不变，仅把 `GRASP_Z_CLEARANCE` 从 0.022 调为 0.007，使实际抓取 TCP 沿世界 `-Z` 累计下探 15 mm。
+- 当前 `GRASP_Z_OFFSET = 0.01275 + 0.007 = 0.01975 m`；该值已在 Isaac Sim 验证，未观察到产品凹槽或托盘碰撞，夹持覆盖高度和回缩稳定性正常。
+- 若未来更换 Product 几何或碰撞体，必须重新检查 AABB 高度、凹槽边缘和托盘间隙，不能直接复用此偏移。

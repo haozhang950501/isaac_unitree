@@ -228,9 +228,20 @@ class CesPickPlaceStateMachine(CesPickMixin, CesWalkMixin, CesPlaceMixin):
                 and self._carry_arm_q is not None
                 else None
             )
+            place_phases = (
+                CesPickPlacePhase.PLACE_HOLD,
+                CesPickPlacePhase.PLACE_APPROACH,
+                CesPickPlacePhase.RELEASE,
+                CesPickPlacePhase.RETRACT,
+                CesPickPlacePhase.DONE,
+            )
+            safe_root_pin = (
+                self._place_lock_pose if self.phase in place_phases else None
+            )
             return self._cmd(
                 tcp=self._grasp_pos_w,
                 quat=self._grasp_quat_w,
                 walk=safe_walk,
+                root_pin=safe_root_pin,
                 arm_q=getattr(self.ctx, "_q_right", None),
             )
