@@ -1,25 +1,7 @@
 # CES 抓取任务开发说明
 
-> 文档口径：CES Fix Baseline（2026-09-08，最终冻结）
-> 核对日期：2026-09-08
-> 任务 ID：`Isaac-Move-CES-Product-G129-Dex1-Wholebody`
-> 状态：完整 Pick→Walk→Place 已通过 Isaac Sim 验证；除明确的安全缺陷修复外，不再直接修改本 Baseline。
-
 ## 1. 文档目的与证据口径
-
 本文说明 CES LoadingLine Product 的“抓取 → 持物行走 → 放置”功能是怎样一步步开发出来的，以及当前代码真正采用了什么方案。
-
-结论来自三类证据：
-
-1. 当前工作区源码和根目录 `memory.md`：用于描述**现在实际运行的行为**。
-2. `git log`、提交说明和历史 diff：用于还原**开发先后顺序**。
-3. 历史 Memory 记录：用于解释当时为什么改方向、哪些验证只做到 CPU/URDF-viz、哪些经过了 Isaac Sim 物理调试。
-
-“反推”不等于臆测。下文把内容分为：
-
-- **当前事实**：可由当前工作区源码和 `memory.md` 直接确认。
-- **历史事实**：可由提交或 Memory 记录确认。
-- **工程推断**：根据相邻提交的代码变化解释动机，会明确写成“可以推断”。
 
 ## 2. 项目结构与 CES 所在位置
 
@@ -104,54 +86,46 @@ SETTLE → GOTO_PICK → UNFOLD → DESCEND → GRASP → LIFT
 三个最容易误解的点：
 
 1. `40_grasp_posture_ref` **不是**硬下发关节姿态，只进入 IK 的零空间项。
-2. 当前 Place **没有** Z-only IK，也没有笛卡尔 XY 修正，只有人工批准的 `05→15` 关节段。
+2. 当前 Place 只有人工批准的 `05→15` 关节段。
 3. 持物靠 Dex1 PD 与接触摩擦，不焊接 TCP，也不直接搬动 Product 位姿。
 
-## 4. 根据 Memory 与提交历史反推的开发过程
+## 4.开发过程
 
-### 4.1 阶段一：先把 CES 场景变成独立任务（2026-08-13）
+### 4.1 阶段一：先把 CES 场景变成独立任务
 
-提交：`618fc90 搭建 CESMachine 取放场景并清理旧托盘/治具任务`
-
+`搭建 CESMachine 取放场景并清理旧托盘/治具任务`
 完成内容：
 
 - 注册 `Isaac-Move-CES-Product-G129-Dex1-Wholebody`。
 - 引入 `CESmachine_pickabble.usd`，直接包装其内部 Product，而不是再生成一个重复物体。
 - 建立 CES、机器人、包装桌、灰筐和仓库的场景组合。
-- 清理早期 tray/fixture 任务残留，把 DiffIK/插值作为后续 FSM 的技术准备。
+- 把 DiffIK/插值作为后续 FSM 的技术准备。
 
-可以推断，这一步的核心目标是先固定“任务边界”和“场景坐标系”。没有这一步，后续抓取点、站位和导航目标都没有稳定参考。
+这一步的核心目标是先固定“任务边界”和“场景坐标系”。没有这一步，后续抓取点、站位和导航目标都没有稳定参考。
 
-### 4.2 阶段二：实现第一版完整 Pick/Place FSM（2026-08-13）
+### 4.2 阶段二：实现第一版完整 Pick/Place FSM
 
-提交：`34bb2d2 pick&place基本功能开发`
-
-首次出现：
+`pick&place基本功能开发`
+完成内容：
 
 - `action_provider_ces_grasp.py`；
 - `action_provider/ces_grasp/constants.py`；
-- 大型单文件 `state_machine.py`；
+- 单文件 `state_machine.py`；
 - CES 奖励、终止和物理参数调整。
 
 这一阶段先证明“状态机能把动作串起来”，代码体量大、职责集中，是功能优先的原型期。
 
-随后 `e974aba` 把放置改为高处松爪自由落下，用来规避贴桌时手腕抖动。这说明早期 Place 更依赖笛卡尔/接触调试，还没有形成最终的人工 pose 15 方案。
+### 4.3 阶段三：从直接动作转为人工路点 + IK 的混合方案
 
-### 4.3 阶段三：从直接动作转为人工路点 + IK 的混合方案（2026-08-15）
-
-提交：
-
-- `6875c87 自然轨迹优化`
-- `e1550b8 姿态调优V2`
-- `01c99d5 Pick优化完成`
+- `自然轨迹优化`
+- `姿态调优V2`
+- `Pick优化`
 
 开发思想发生了关键变化：
 
 - 远离 Product 的大幅展臂，用人工设计的关节路点完成；
 - 靠近 Product 的最后下降，用真实 TCP 全位姿 IK 完成；
 - pose 40 只给肩肘一个姿态倾向，不直接覆盖任务空间目标。
-
-当时先有 `ces_pick_natural_v1`，再有 `ces_pick_natural_v2`。V2 曾采用 `00→05→10→20→25→30`，并保留 V1/旧 FSM 回退。当前代码已删除这些兼容分支，只保留 Smooth V1。
 
 为什么采用混合方案：
 
@@ -160,13 +134,9 @@ SETTLE → GOTO_PICK → UNFOLD → DESCEND → GRASP → LIFT
 - 最终落点必须适应 Product 实际位置，不能只靠离线 q；
 - 零空间 q_ref 可以在不破坏 TCP 目标的前提下引导肘部。
 
-### 4.4 阶段四：发现 Wholebody 命令是机体系，开始修导航（2026-08-16 至 08-19）
+### 4.4 阶段四：发现 Wholebody 命令是机体系，开始修导航
 
-提交：
-
-- `8756f2f 导航开发待测试`
-- `634f9a8 pick0.1_619`
-- `157d2cc pick+walk_done`
+- `导航开发`
 
 历史问题是把 `[vx, vy, wz, height]` 当成世界系命令。实际它是机器人机体系：
 
@@ -184,12 +154,10 @@ $$
 
 原因是 Wholebody 策略存在明显死区：小速度、纯 `vy` 或纯 `wz` 很可能只晃不迈步。因此不能用常规比例控制在终点附近无限降速，而要用固定幅值 + 死区 + 提前松指令补偿滑行。
 
-### 4.5 阶段五：确定 Smooth Pick 和 50 Hz 插补（2026-08-21）
+### 4.5 阶段五：确定 Smooth Pick 和 50 Hz 插补
 
-提交：
-
-- `521c145 smooth Pick design`
-- `984f178 Pick 提速 + 压缩启动等待 + 修 WebRTC 报错`
+- `Pick design`
+- `Pick 提速 + 压缩启动等待 + 修 WebRTC 报错`
 
 Smooth V1 固定为 `00→10→20→30`，使用单调三次 Hermite。它解决的是“经过多个手工路点时速度连续、每个关节不在相邻路点间过冲”。
 
@@ -203,12 +171,10 @@ $$
 
 当前默认 $s=1.5$，限制在 `[0.25, 3.0]`。DESCEND 和 GRASP 不缩放，因为前者关系到对位精度，后者关系到真实闭爪接触时间。
 
-### 4.6 阶段六：把返回路径改成实时 40 回胸（2026-08-22 至 08-23）
+### 4.6 阶段六：把返回路径改成实时 40 回胸
 
-提交：
-
-- `904f219 优化 Pick 逆序回收到胸前姿态`
-- `c29e812 手臂回收轨迹去除冗余姿态`
+- `优化 Pick 逆序回收到胸前姿态`
+- `手臂回收轨迹去除冗余姿态`
 
 关键设计：返回第一点不能硬发 authored pose 40，因为下降/抓取/抬起后的真实 q 已经由 IK 和接触决定。正确起点是抬起后的实时 q：
 
@@ -220,15 +186,11 @@ $$
 
 历史 Memory 中曾有 `40(live)→30→05` 的较短版本；当前 Baseline 又加入 pose 20，因为它承担退出抽屉边缘的安全过渡。判断当前行为必须以最新 `memory.md` 和 manifest 为准。
 
-### 4.7 阶段七：完善 Walk→Pin→Place 全链路（2026-08-23 至 08-24）
+### 4.7 阶段七：完善 Walk→Pin→Place 全链
 
-提交：
-
-- `9fe9634 walk优化`
+- `walk优化`
 - `c1f8add pick+place 优化`
-- `dbdca84 walk到站钉live quat稳住夹持，下一步重做05/15`
-- `86f948e 更新 Pick/Place 05 和 15 位姿`
-- `4064859 归档 CES pick-walk-place 几何与走位 baseline`
+- `dbdca84 walk到站钉live quat稳住夹持，重做05/15 Pick/Place 05 和 15 位姿`
 
 到站后的策略从“继续依赖步态站稳”改成：
 
@@ -242,12 +204,9 @@ $$
 
 ### 4.8 阶段八：修正下降前夹爪偏航，完成人工 pose 15（2026-08-24）
 
-提交：
-
-- `daf5409 pick_baseline_ok：DESCEND 先把夹爪偏航对齐世界 X 再落 Z`
-- `4ac4306 15pose_left：桌面抬高、松爪贴筐底；15 姿态留下待重做`
-- `cbe27f8 手动调整15位姿完成`
-- `738d372 Baseline_done`
+- `DESCEND 先把夹爪偏航对齐世界 X 再落 Z`
+- `桌面抬高、松爪贴筐底；15 姿态留下待重做`
+- `手动调整15位姿`
 
 pose 30 的夹持轴与世界 X 约差 68°。如果一边下落一边大幅扭腕，容易在托盘附近造成碰撞或 IK 抖动。最终方案是：
 
@@ -258,38 +217,25 @@ pose 30 的夹持轴与世界 X 约差 68°。如果一边下落一边大幅扭�
 
 pose 15 则由人工在 URDF-viz 中最终确认。当前 q 已集中到单一 manifest，不再分散在多个 JSON 文件里。
 
-### 4.9 阶段九：Baseline 冻结后做结构和运行时重构（2026-08-29 至 08-30）
+### 4.9 阶段九：Baseline结构和运行时重构
 
-提交：
-
-- `cdbf3ca refactor: simplify CES baseline state machine`
-- `7e6b914 refactor: optimize CES baseline runtime`
-- `69bf52a refactor: streamline CES baseline pipeline`
+- `简化 CES 状态机`
+- `优化 CES runtime`
 
 三轮重构没有改变 Baseline 合约，主要做了：
 
 - 把超大状态机拆成 `fsm_pick/fsm_walk/fsm_place` mixin；
-- 删除 Natural V1/V2、snap、通用 station mode、Z-only Place 等旧分支；
 - 把 CES 专用插值和 IK 收进 `action_provider/ces_grasp`；
-- 把七组 q、三条路径和时长合并到 schema 2 manifest；
-- 改成显式 root pin；
 - 复用 Tensor、索引和动作缓冲，减少控制循环分配；
-- 删除完成阶段性验证后不再保留的临时 CES 测试/工具。
 
 当前代码因此是“单任务、单清单、单路线”的专用 Baseline，而不是一个通用抓取框架。
 
-### 4.10 阶段十：Place 收尾修复并冻结 Fix Baseline（2026-09-08）
-
-场景参数整理后，Place 的诊断日志仍引用 `TABLE_TOP_Z` 和 `PLACE_TRAY_HEIGHT`，但 `constants.py` 一度漏导入这两个常量。异常恰好发生在 RELEASE 满 0.8 s、准备进入 RETRACT 时，使状态机停留在 RELEASE；旧异常兜底又没有继续返回到站骨盆的 `root_pin`，因此机器人解除固定后表现为收尾失稳。
+### 4.10 阶段十：验证并冻结 Fix Baseline
 
 最终修复与验收结论：
 
-- 恢复两个场景常量导入；
-- 将 `_log_place_result()` 的采样、计算和格式化全部隔离，诊断失败不再影响 RELEASE→RETRACT→DONE 主链；
 - Place 各阶段的顶层异常兜底继续返回 `_place_lock_pose`，非关键异常不会解除到站骨盆固定；
 - Isaac Sim 已验证 RELEASE 正常进入 RETRACT 和 DONE，收尾不再失稳；
-- 深夹实验曾把 `GRASP_Z_CLEARANCE` 从 0.022 降到 0.007，确认会使指垫穿入 Product 凹槽；隔离 worktree 中的世界 `-Y` 横移实验也未可靠避开凹槽，两者均已否决并移除；
-- 最终抓取参数恢复为 `GRASP_Z_CLEARANCE=0.022`、`GRASP_SHIFT_Y=0.0`，`TCP_LOCAL=(0,0.115,0)` 保持不变。
 
 以上状态定义为 CES Fix Baseline。后续新抓取几何、回缩策略或场景适配必须以独立任务、分支或 manifest 实验，不得静默改写本 Baseline。
 
@@ -738,7 +684,7 @@ $$
 | 放置站 yaw | $\pi/2$ | 面向世界 `+Y` |
 | 放置站 XY | `(-2.2669, -0.7717)` | 直接常量，不再运行时反算 |
 | 桌面 Z | `0.6373 m` | 固定最终值 |
-| 包装桌 Z 缩放 | `0.6411` | 保留 4 位小数已足够 |
+| 包装桌 Z 缩放 | `0.6411` | 保留 4 位小数|
 | 灰筐高度 | `0.1026 m` | 随桌子缩放后的最终值 |
 | Product 质量 | `0.25 kg` | 启动事件写入 |
 | Product 掉落阈值 | `0.32 m` | 奖励与终止共用 |
@@ -840,7 +786,7 @@ python sim_main.py \
 
 如果要修改 CES，建议按以下顺序：
 
-1. 先同步远端、确认工作区干净、阅读最新 `memory.md`。
+1. 先同步远端、确认工作区干净。
 2. 明确改的是哪一层：场景几何、人工 q、插值、IK、导航、接触物理或启动链路。
 3. 若改人工 pose，先在 URDF-viz 预览，由人确认 q，再只更新 manifest 对应数组。
 4. 若改路线，先用纯数学测试验证世界/机体系投影、阶段切换、停止线和 keep-out。
@@ -854,4 +800,3 @@ python sim_main.py \
 
 - [02_CES架构设计.md](02_CES架构设计.md)：系统边界、组件关系、状态机、控制权和安全架构。
 - [03_CES模块设计与核心代码解析.md](03_CES模块设计与核心代码解析.md)：逐文件逐函数说明、公式与核心实现解读。
-- [04_项目代码理解阅读推荐.md](04_项目代码理解阅读推荐.md)：建议阅读顺序、代码文件路线和数学基础清单。
