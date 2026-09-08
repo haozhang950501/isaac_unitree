@@ -124,4 +124,7 @@ assets.*
 assets
 
 ${data}
+
+# Local project memory (keep on developer machines only)
+/memory.md
 *.etli
