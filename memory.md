@@ -1,6 +1,8 @@
 # unitree_sim_isaaclab 项目记忆
 
-更新时间：2026-09-08，CES 全链路已完成 Place 收尾安全修复与 Pick 夹持深度优化，并通过 Isaac Sim 物理验证。
+更新时间：2026-09-08，CES Fix Baseline 已最终冻结：Place 收尾安全修复通过验证，Pick 深夹与世界 Y 偏移实验因凹槽干涉已回退。
+
+> 冻结原则：当前完整 Pick→Walk→Place 行为、几何、人工 q、路线和物理参数不再直接调整；仅明确的安全缺陷或回归修复可在完整验证后更新 Baseline。新方案必须在独立任务、分支或 manifest 中实验。
 
 ## 1. 当前任务
 
@@ -48,7 +50,7 @@ CES 专用参数只保留 `--auto_ces_pick_place` 和 `--ces_pick_speed`。
 - 30 到位后先在当前高度把夹爪偏航对齐世界 ±X，再锁住世界 XY 下降。
 - 40 永远只是下降阶段的动态零空间 `q_ref`，不能作为 `arm_q` 下发。
 - 抓住后只求解一次抬升 IK，随后用关节插补抬起，避免摩擦夹持时逐帧 DiffIK 抖动。
-- Pick TCP 的 Z 目标由 Product AABB 中心、`PRODUCT_HALF_Z` 和 `GRASP_Z_CLEARANCE` 共同决定；当前 `GRASP_Z_CLEARANCE=0.007`、`GRASP_Z_OFFSET=0.01975`，相对原始 0.022 基线沿世界 `-Z` 累计加深 15 mm，以增加指垫接触高度。不要通过修改 pose 40 调整抓取深度。
+- Pick TCP 的 Z 目标由 Product AABB 中心、`PRODUCT_HALF_Z` 和 `GRASP_Z_CLEARANCE` 共同决定；当前已恢复原始 `GRASP_Z_CLEARANCE=0.022`、`GRASP_Z_OFFSET=0.03475`，只夹 Product 上沿，避免指垫穿入凹槽。不要通过修改 pose 40 或 `TCP_LOCAL` 调整抓取深度。
 
 ### Return
 
@@ -141,9 +143,16 @@ action_provider/ces_grasp/
 - PLACE_HOLD、PLACE_APPROACH、RELEASE、RETRACT、DONE 的异常兜底继续使用 `_place_lock_pose`，避免放置期间因非关键异常解除骨盆锁定。
 - 修复后已完成 Isaac Sim 全链路验证，RELEASE 能正常进入 RETRACT 和 DONE，机器人不再在收尾阶段失稳。
 
-### Pick 夹持深度优化
+### Pick 深夹实验与回退
 
-- 产品偶发在 LIFT 完成后的 RETURN_HOME 回缩过程中滑落，判断为浅夹持降低了对关节运动加速度的抗扰余量。
-- 保持 pose 40、Dex1 PD、摩擦和回缩轨迹不变，仅把 `GRASP_Z_CLEARANCE` 从 0.022 调为 0.007，使实际抓取 TCP 沿世界 `-Z` 累计下探 15 mm。
-- 当前 `GRASP_Z_OFFSET = 0.01275 + 0.007 = 0.01975 m`；该值已在 Isaac Sim 验证，未观察到产品凹槽或托盘碰撞，夹持覆盖高度和回缩稳定性正常。
-- 若未来更换 Product 几何或碰撞体，必须重新检查 AABB 高度、凹槽边缘和托盘间隙，不能直接复用此偏移。
+- 为降低产品在 RETURN_HOME 中偶发滑落，曾把 `GRASP_Z_CLEARANCE` 从 0.022 逐步降至 0.007，使 TCP 沿世界 `-Z` 累计下探 15 mm。
+- Isaac Sim 近距离检查确认深夹会使指垫穿入 Product 凹槽，因此该方案无效，不能归入 Baseline。
+- 隔离 worktree 中还验证了“高位沿世界 `-Y` 横移后再垂直下降”的方案；横移仍未可靠避开凹槽，实验 worktree 与分支已删除，相关代码未进入 main。
+- 当前 main 已恢复 `GRASP_Z_CLEARANCE=0.022` 和 `GRASP_Z_OFFSET=0.03475 m`。未来处理回缩滑落应优先降低 RETURN_HOME 加速度、延长夹紧稳定时间或重新选择无凹槽接触面，而不是继续增加 Z 深度。
+
+### Fix Baseline 冻结点
+
+- 抓取几何固定为 `GRASP_INSET=0.020`、`GRASP_SHIFT_Y=0.0`、`GRASP_Z_CLEARANCE=0.022`；`TCP_LOCAL=(0,0.115,0)` 保持工具坐标标定语义。
+- Place 诊断日志必须与控制状态转换解耦；PLACE_HOLD 至 DONE 的异常兜底必须保留 `_place_lock_pose`。
+- 现有 Smooth V1 q、`40(live)→30→20→05`、Wholebody 三段路线、05→15→05、Dex1 PD 和接触参数均属于冻结 Baseline。
+- 深夹和世界 `-Y` 横移为已否决实验，不得通过直接改常量重新启用。

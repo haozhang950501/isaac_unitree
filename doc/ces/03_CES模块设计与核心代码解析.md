@@ -1,6 +1,7 @@
 # CES 模块设计与核心代码解析
 
-> 代码口径：`main@69bf52a` Baseline + 当前工作区坐标/注释简化
+> 代码口径：CES Fix Baseline（2026-09-08，最终冻结）
+> 状态：完整 Pick→Walk→Place 已通过 Isaac Sim 验证；除明确的安全缺陷修复外不再直接修改本 Baseline。
 > 目标：解释 CES 相关文件、类、函数、调用关系、输入输出、数学含义与设计约束。
 
 ## 1. 覆盖范围
@@ -205,7 +206,7 @@ $$T'_i=\max(T_{min},T_i/s)$$
 
 ### `step()`
 
-每帧累加控制 dt，按 `_PHASE_HANDLERS` 反射调用当前 `_step_xxx`。异常每 2 s 最多记录一次，并返回步态归零/保持当前手臂的安全命令。
+每帧累加控制 dt，按 `_PHASE_HANDLERS` 反射调用当前 `_step_xxx`。异常每 2 s 最多记录一次，并返回步态归零/保持当前手臂的安全命令。若异常发生在 PLACE_HOLD、PLACE_APPROACH、RELEASE、RETRACT 或 DONE，安全命令还会继续携带 `_place_lock_pose`，避免解除到站骨盆固定。
 
 ## 8. `fsm_pick.py`
 
@@ -249,6 +250,8 @@ $$\mathbf z=\frac{\mathbf x\times\mathbf d}{\|\mathbf x\times\mathbf d\|},\qquad
 
 $$\mathbf p_g=\mathbf p_{aabb}+0.020\mathbf f(\pi)+(0,0,0.01275+0.022)$$
 
+其中 `GRASP_Z_CLEARANCE=0.022`、`GRASP_SHIFT_Y=0.0` 为 Fix Baseline 冻结值。把 clearance 降到 0.007 的深夹实验已确认会使指垫穿入 Product 凹槽；世界 `-Y` 横移实验也未可靠避开凹槽。`TCP_LOCAL=(0,0.115,0)` 表示手部局部工具点，不是世界 Y 抓取偏移，保持不变。
+
 抬升目标：
 
 $$\mathbf p_{lift}=\mathbf p_g+(0,-0.06,0.08)$$
@@ -290,7 +293,7 @@ $$p>0.02-0.06=-0.04\text{ m}$$
 | `_frozen_place_arm()` | 惰性捕获/返回 pose 15 保持 q |
 | `_begin_place_approach()` | 以 live q 为起点装载 05→15，并记录 $\|q_{live}-q_{05}\|_\infty$ |
 | `_begin_retract()` | 以 live 15 回 `_carry_arm_q`/05，总时长 3.2 s |
-| `_log_place_result(tag)` | 记录 Product 到筐中心 dxy 和相对筐顶高度，不参与控制 |
+| `_log_place_result(tag)` | 记录 Product 到筐中心 dxy 和相对筐顶高度；全部诊断逻辑隔离异常，不参与或中断控制 |
 | `_step_place_hold()` | 钉 live 骨盆、闭爪、保持 05 共 0.45 s |
 | `_step_place_approach()` | 钉盆执行 05→15，完成后 RELEASE |
 | `_step_release()` | 张爪保持 15；0.8 s 后开始 15→05 |
@@ -1144,7 +1147,17 @@ pin 只改机器人骨盆；Product 仍受重力、接触和摩擦。Walk→Pin 
 | scene 坐标/桌高 | 全部几何链路 | 站位、路线、Pick/Place |
 | physics dt/decimation | 控制频率和时长 | provider dt、策略、插值 |
 
-## 24. 关联文档
+## 24. Fix Baseline 冻结约束
+
+当前 CES Fix Baseline 固定以下控制与几何契约：
+
+- 抓取点使用 `GRASP_Z_CLEARANCE=0.022`、`GRASP_SHIFT_Y=0.0`，工具点使用 `TCP_LOCAL=(0,0.115,0)`；
+- 40 只作为下降 IK 的动态 `q_ref`，人工 q、三段路线、Dex1/接触参数和 Place 05→15→05 不变；
+- Place 诊断不能影响状态转换，Place 异常兜底必须保留 `_place_lock_pose`；
+- 已否决的深夹和世界 `-Y` 横移方案不得以“参数微调”方式重新并入当前 Baseline；
+- 新几何、回缩防滑或场景适配必须使用独立任务、分支或 manifest，并重新完成静态、轨迹和 Isaac Sim 物理验收。
+
+## 25. 关联文档
 
 - [01_CES开发说明.md](01_CES开发说明.md)
 - [02_CES架构设计.md](02_CES架构设计.md)

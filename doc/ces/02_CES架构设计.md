@@ -1,7 +1,7 @@
 # CES 抓取任务架构设计
 
-> 适用版本：`main@69bf52a` Baseline + 当前工作区坐标/注释简化
-> 本文描述当前唯一 Smooth V1 + Wholebody Walk + 完整 Place Baseline。
+> 适用版本：CES Fix Baseline（2026-09-08，最终冻结）
+> 本文描述当前唯一 Smooth V1 + Wholebody Walk + 完整 Place Baseline。完整链路已通过 Isaac Sim 验证，除明确的安全缺陷修复外不再直接改动。
 
 ## 1. 架构目标
 
@@ -127,6 +127,8 @@ stateDiagram-v2
 - `CesPlaceMixin`：`PLACE_HOLD` 至 `FAILED`。
 
 三个 mixin 共享同一个实例状态，避免跨控制器同步轨迹、计时器和缓存。
+
+Place 阶段还有一条独立安全约束：`_log_place_result()` 只负责诊断，内部任何采样、计算或格式化异常都不得阻断 RELEASE→RETRACT→DONE；若 Place 阶段仍有未预期异常，`step()` 的兜底命令必须继续携带 `_place_lock_pose`，不能解除到站骨盆固定。
 
 ## 6. 单帧命令协议
 
@@ -396,7 +398,8 @@ $$
 | 接近桌面过头 | 独立 keep-out 闩锁 | 永久步态归零，从当前位置放置 |
 | 到站余晃 | 站稳 hold + live root pin | 固定实际骨盆再放置 |
 | 持物突降 | Product Z 相对下降 > 0.05 m | 每轮至多告警一次，不打断流程 |
-| 任意 FSM 异常 | `step()` 顶层捕获 | 返回不扩散运动的安全命令 |
+| Place 结果诊断异常 | `_log_place_result()` 内部隔离 | 仅丢失日志，RELEASE→RETRACT→DONE 继续执行 |
+| 任意 FSM 异常 | `step()` 顶层捕获 | 返回不扩散运动的安全命令；Place 阶段保留 live root pin |
 
 keep-out 与导航器独立，避免某个规划分支遗漏停止条件时继续撞桌。
 
@@ -493,6 +496,8 @@ $$
 
 ## 19. 推荐的扩展点
 
+Fix Baseline 的冻结边界包括 `GRASP_Z_CLEARANCE=0.022`、`GRASP_SHIFT_Y=0.0`、`TCP_LOCAL=(0,0.115,0)`、现有人工 q、路线和物理参数。深夹到 0.007 的方案已因指垫穿入 Product 凹槽被否决，世界 `-Y` 横移实验也未可靠避障；二者都不是可恢复的 Baseline 选项。
+
 若未来扩展而不破坏 Baseline，建议沿以下接口：
 
 1. 新的 Product 定位器：实现与 `get_product_aabb_center_w()` 相同的世界坐标输出，可由 CV 替换，但不要直接改 FSM。
@@ -501,6 +506,8 @@ $$
 4. 新 IK：保持 `solve(target_pos_w, target_quat_w, q_ref)` 合约，并验证 q_ref 只在零空间。
 5. 精确入筐验收：新增独立几何判定，不要把现有粗粒度奖励偷偷改成另一种含义。
 6. 长期测试：给纯数学模块和 manifest 合约恢复可常驻 CPU 测试，物理验收仍单独保留。
+
+新抓取几何、回缩防滑或场景适配应建立独立任务、分支或 manifest，并完成静态、轨迹和 Isaac Sim 物理验收后再决定是否形成新的版本化 Baseline，不能覆盖当前固定值。
 
 ## 20. 数学设计如何落到架构
 

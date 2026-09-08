@@ -1,8 +1,9 @@
 # CES 抓取任务开发说明
 
-> 文档口径：`main@69bf52a` Baseline + 当前工作区坐标/注释简化
-> 核对日期：2026-09-06
+> 文档口径：CES Fix Baseline（2026-09-08，最终冻结）
+> 核对日期：2026-09-08
 > 任务 ID：`Isaac-Move-CES-Product-G129-Dex1-Wholebody`
+> 状态：完整 Pick→Walk→Place 已通过 Isaac Sim 验证；除明确的安全缺陷修复外，不再直接修改本 Baseline。
 
 ## 1. 文档目的与证据口径
 
@@ -277,6 +278,21 @@ pose 15 则由人工在 URDF-viz 中最终确认。当前 q 已集中到单一 m
 
 当前代码因此是“单任务、单清单、单路线”的专用 Baseline，而不是一个通用抓取框架。
 
+### 4.10 阶段十：Place 收尾修复并冻结 Fix Baseline（2026-09-08）
+
+场景参数整理后，Place 的诊断日志仍引用 `TABLE_TOP_Z` 和 `PLACE_TRAY_HEIGHT`，但 `constants.py` 一度漏导入这两个常量。异常恰好发生在 RELEASE 满 0.8 s、准备进入 RETRACT 时，使状态机停留在 RELEASE；旧异常兜底又没有继续返回到站骨盆的 `root_pin`，因此机器人解除固定后表现为收尾失稳。
+
+最终修复与验收结论：
+
+- 恢复两个场景常量导入；
+- 将 `_log_place_result()` 的采样、计算和格式化全部隔离，诊断失败不再影响 RELEASE→RETRACT→DONE 主链；
+- Place 各阶段的顶层异常兜底继续返回 `_place_lock_pose`，非关键异常不会解除到站骨盆固定；
+- Isaac Sim 已验证 RELEASE 正常进入 RETRACT 和 DONE，收尾不再失稳；
+- 深夹实验曾把 `GRASP_Z_CLEARANCE` 从 0.022 降到 0.007，确认会使指垫穿入 Product 凹槽；隔离 worktree 中的世界 `-Y` 横移实验也未可靠避开凹槽，两者均已否决并移除；
+- 最终抓取参数恢复为 `GRASP_Z_CLEARANCE=0.022`、`GRASP_SHIFT_Y=0.0`，`TCP_LOCAL=(0,0.115,0)` 保持不变。
+
+以上状态定义为 CES Fix Baseline。后续新抓取几何、回缩策略或场景适配必须以独立任务、分支或 manifest 实验，不得静默改写本 Baseline。
+
 ## 5. 当前每个阶段的输入、动作和退出条件
 
 | 阶段 | 主要输入 | 输出控制 | 退出条件 |
@@ -353,6 +369,8 @@ $$
 当前 $d_{in}=0.020$ m、$\Delta y=0$、$h_{half}=0.01275$ m、$h_{clear}=0.022$ m。抓取站 $\psi_{pick}=\pi$，所以推进抽屉方向是世界 `-X`。
 
 使用 AABB 而不是 USD 根节点，是因为 Product 根 pivot 不在几何中心。
+
+`h_{clear}=0.022` 是冻结值：继续减小该值会让 TCP 沿世界 `-Z` 深入，已实测造成指垫与 Product 凹槽干涉。`TCP_LOCAL=(0,0.115,0)` 是手部局部坐标系中的工具点标定，其中的 Y 不是世界 Y，不能用来代替世界横向避障。
 
 ### 6.3 smoothstep
 
@@ -817,6 +835,8 @@ python sim_main.py \
 8. **CLI 帮助文字有一处滞后**：`sim_main.py` 的 `--ces_pick_speed` 帮助只写了 unfold/lift/return-home；当前 `state_machine.py` 实际还会缩放 manifest Place 关节段 `05→15`。`15→05` retract 仍固定为 3.2 s。
 
 ## 12. 后续开发建议与变更流程
+
+本节适用于新版本探索，不表示允许直接改动 Fix Baseline。冻结范围包括抓取点 `GRASP_Z_CLEARANCE=0.022`、`GRASP_SHIFT_Y=0.0`、`TCP_LOCAL=(0,0.115,0)`，以及现有人工 q、路线、物理参数和 Place 控制链。只有明确的安全缺陷或回归修复，经过静态检查与 Isaac Sim 全链路验收后，才可更新 Baseline。
 
 如果要修改 CES，建议按以下顺序：
 
